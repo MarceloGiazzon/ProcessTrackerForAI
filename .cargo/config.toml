@@ -1,0 +1,8 @@
+# Link the C runtime statically on Windows so users never need the
+# "Visual C++ Redistributable" installed. Linux release builds use the musl
+# target for the same reason (see .github/workflows/release.yml).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

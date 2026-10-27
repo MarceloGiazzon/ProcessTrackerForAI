@@ -1,0 +1,36 @@
+[package]
+name = "process-tracker-for-ai"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "See and control the long-running processes your AI coding agents start: what is running, who started it, since when, how it ended."
+license = "MIT"
+readme = "README.md"
+keywords = ["ai", "agents", "process", "jobs", "supervisor"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "ptrack"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

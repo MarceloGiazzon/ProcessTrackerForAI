@@ -1,0 +1,63 @@
+# Builds a single, dependency-free binary for each platform when a version
+# tag (v0.1.0, ...) is pushed, and attaches them to a GitHub Release.
+#   Windows: static C runtime (see .cargo/config.toml), no VC++ redistributable needed.
+#   Linux:   musl, fully static, runs on any distribution.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest,   target: x86_64-pc-windows-msvc }
+          - { os: windows-latest,   target: aarch64-pc-windows-msvc }
+          - { os: ubuntu-latest,    target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { os: macos-latest,     target: aarch64-apple-darwin }
+          - { os: macos-latest,     target: x86_64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable && rustup default stable && rustup target add ${{ matrix.target }}
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "ptrack-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/ptrack.exe", README.md, LICENSE -DestinationPath $name
+          (Get-FileHash $name -Algorithm SHA256).Hash.ToLower() + "  $name" | Out-File "$name.sha256" -Encoding ascii
+          gh release upload "$env:GITHUB_REF_NAME" $name "$name.sha256" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Package (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          name="ptrack-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz"
+          tar czf "$name" -C "target/${{ matrix.target }}/release" ptrack -C "$GITHUB_WORKSPACE" README.md LICENSE
+          shasum -a 256 "$name" > "$name.sha256"
+          gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
