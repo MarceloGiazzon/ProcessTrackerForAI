@@ -339,16 +339,7 @@ pub fn install_interrupt_handler() {
 /// children inherit (so no console windows pop up). It tries to break away
 /// from the caller's Job Object, so closing the agent does not kill the job.
 pub fn spawn_detached(exe: &Path, args: &[OsString]) -> io::Result<()> {
-    // Windows passes every inheritable handle to a child, including our own
-    // stdout/stderr. If those are pipes (an agent capturing our output), the
-    // caller would wait for the whole background job. This process is about
-    // to exit, so it is safe to stop sharing them.
-    for std_handle in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
-        // SAFETY: GetStdHandle may return null/invalid; SetHandleInformation then just fails.
-        unsafe {
-            SetHandleInformation(GetStdHandle(std_handle), HANDLE_FLAG_INHERIT, 0);
-        }
-    }
+    stop_sharing_std_handles();
     let base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
     let start = |flags: u32| {
         Command::new(exe)
@@ -399,4 +390,18 @@ pub fn shell_command(script: &str) -> Command {
     let mut cmd = Command::new("cmd.exe");
     cmd.raw_arg(format!("/d /s /c \"{script}\""));
     cmd
+}
+
+/// Windows passes every inheritable handle to a child, including our own
+/// stdin/stdout/stderr. If those are pipes (an agent capturing our output),
+/// the caller would keep waiting until that child exits. Call this right
+/// before starting a process that may outlive this one, when this process
+/// will not start any child that needs them afterwards.
+pub fn stop_sharing_std_handles() {
+    for std_handle in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle may return null/invalid; SetHandleInformation then just fails.
+        unsafe {
+            SetHandleInformation(GetStdHandle(std_handle), HANDLE_FLAG_INHERIT, 0);
+        }
+    }
 }

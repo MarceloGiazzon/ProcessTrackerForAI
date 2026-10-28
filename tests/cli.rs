@@ -446,3 +446,34 @@ fn rerun_refuses_a_job_that_is_still_running() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("still running"));
     h.ptrack(&["stop", &id, "--force"]);
 }
+
+#[test]
+fn notify_settings_are_saved_and_validated() {
+    let h = Home::new("notify");
+    let show = h.ptrack(&["notify"]);
+    assert!(String::from_utf8_lossy(&show.stdout).contains("desktop notifications: off"));
+
+    assert!(h.ptrack(&["notify", "on"]).status.success());
+    assert!(h.ptrack(&["notify", "min-seconds", "0"]).status.success());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(h.0.join("config.json")).unwrap()).unwrap();
+    assert_eq!(saved["notify"]["desktop"], true);
+    assert_eq!(saved["notify"]["min_seconds"], 0);
+
+    assert_eq!(
+        h.ptrack(&["notify", "min-seconds", "soon"]).status.code(),
+        Some(2)
+    );
+    assert_eq!(h.ptrack(&["notify", "sideways"]).status.code(), Some(2));
+    assert!(h.ptrack(&["notify", "off"]).status.success());
+
+    // A broken settings file is reported, not overwritten, and never breaks jobs.
+    std::fs::write(h.0.join("config.json"), "{ broken").unwrap();
+    assert_eq!(h.ptrack(&["notify", "on"]).status.code(), Some(2));
+    assert_eq!(
+        std::fs::read_to_string(h.0.join("config.json")).unwrap(),
+        "{ broken"
+    );
+    let out = h.ptrack(&["run", "-q", "-s", "--", "echo still works"]);
+    assert!(out.status.success());
+}

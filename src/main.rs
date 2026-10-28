@@ -1,9 +1,11 @@
 //! ptrack: see and control the long-running processes your AI agents start.
 
 mod commands;
+mod config;
 mod hook;
 mod job;
 mod mcp;
+mod notify;
 mod platform;
 mod supervise;
 mod util;
@@ -33,6 +35,8 @@ USAGE
   ptrack hook install [--project] [--all] [--no-prompts]
                                                 make Claude Code run long commands through ptrack
   ptrack hook uninstall [--project]             remove that hook again
+  ptrack notify [on|off|min-seconds N|test]     desktop notification when a job ends
+                                                (off by default; only jobs >= 30 s)
 
 RUN OPTIONS
   -l, --label TEXT    a human-readable name for the job
@@ -202,6 +206,7 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
             p.no_more()?;
             Ok(mcp::serve(allow_control))
         }
+        "notify" => notify::command(&args.into_iter().collect::<Vec<_>>()),
         "hook" => {
             let what = args.pop_front().unwrap_or_default();
             let mut p = Parser::new(args);

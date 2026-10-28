@@ -116,6 +116,21 @@ Tick **Notify when jobs end** to get a notification from your browser whenever a
 This works only while the page is open. The first time, the browser asks for permission. The
 **Rerun** button on a finished job starts its command again, in the same folder.
 
+## Notifications when a job ends
+
+```sh
+ptrack notify on        # desktop notification when a job ends (off by default)
+ptrack notify test      # check that notifications reach your screen
+ptrack notify           # show the current settings
+ptrack notify off
+```
+
+Only jobs that ran at least 30 seconds trigger a notification, so quick commands don't spam you.
+Change that with `ptrack notify min-seconds N`. Jobs you stopped yourself don't notify. ptrack uses
+what each system already has: PowerShell on Windows, where the notification says it comes from
+"Windows PowerShell"; `osascript` on macOS; and `notify-send` on Linux. If `notify-send` is
+missing on Ubuntu, install it with `sudo apt install libnotify-bin`.
+
 ## MCP server (for agents)
 
 `ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
@@ -184,6 +199,7 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other 
 | `ptrack mcp [--allow-control]` | MCP server over stdio for AI agents. |
 | `ptrack hook install [--project] [--all] [--no-prompts]` | Claude Code hook: long commands run through ptrack automatically. |
 | `ptrack hook uninstall [--project]` | Removes the hook. |
+| `ptrack notify [on\|off\|min-seconds N\|test]` | Desktop notification when a job ends. |
 
 Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
 `-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--agent`, `--session`.

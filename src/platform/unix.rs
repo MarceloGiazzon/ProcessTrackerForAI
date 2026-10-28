@@ -120,3 +120,7 @@ pub fn shell_command(script: &str) -> Command {
     cmd.arg("-c").arg(script);
     cmd
 }
+
+/// Nothing to do on Unix: children get /dev/null for stdio when asked, and
+/// Rust opens every other file descriptor as close-on-exec.
+pub fn stop_sharing_std_handles() {}

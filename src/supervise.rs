@@ -309,6 +309,7 @@ fn supervise(opts: RunOpts) -> i32 {
     if let Err(e) = job.save() {
         eprintln!("ptrack: cannot write final job state: {e}");
     }
+    crate::notify::job_finished(&job);
 
     if speak {
         eprintln!("{}", summary(&job));
