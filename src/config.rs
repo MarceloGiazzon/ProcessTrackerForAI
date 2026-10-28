@@ -22,6 +22,9 @@ pub struct NotifyConfig {
     pub desktop: bool,
     /// Only jobs that ran at least this many seconds trigger notifications.
     pub min_seconds: u64,
+    /// Also POST each finished job to this http(s) URL.
+    pub webhook: Option<String>,
+    pub webhook_format: WebhookFormat,
 }
 
 impl Default for NotifyConfig {
@@ -29,8 +32,21 @@ impl Default for NotifyConfig {
         NotifyConfig {
             desktop: false,
             min_seconds: 30,
+            webhook: None,
+            webhook_format: WebhookFormat::Json,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WebhookFormat {
+    /// `{"text": ..., "content": ..., "job": {...}}`: Slack reads `text`,
+    /// Discord reads `content`, scripts read `job`.
+    #[default]
+    Json,
+    /// Two plain lines (title, details), e.g. for ntfy.sh.
+    Text,
 }
 
 pub fn path() -> PathBuf {

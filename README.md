@@ -131,6 +131,22 @@ what each system already has: PowerShell on Windows, where the notification says
 "Windows PowerShell"; `osascript` on macOS; and `notify-send` on Linux. If `notify-send` is
 missing on Ubuntu, install it with `sudo apt install libnotify-bin`.
 
+To get a message on your phone or in a chat when a job ends, add a **webhook**. ptrack then POSTs
+every finished job to that address. It uses `curl`, which Windows 10+, macOS and Linux already
+have:
+
+```sh
+ptrack notify webhook https://hooks.slack.com/services/...   # Slack or Discord: works as is
+ptrack notify webhook https://ntfy.sh/my-secret-topic        # ntfy phone app: also run
+ptrack notify webhook-format text                            #   (plain text instead of JSON)
+ptrack notify test                                           # send a test message now
+ptrack notify webhook off
+```
+
+The JSON payload has `text` (read by Slack), `content` (read by Discord) and `job` (the full job
+record, for your own scripts). Webhook messages include the command line and its last output line,
+so only send them to a service you trust.
+
 ## MCP server (for agents)
 
 `ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
@@ -200,6 +216,7 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other 
 | `ptrack hook install [--project] [--all] [--no-prompts]` | Claude Code hook: long commands run through ptrack automatically. |
 | `ptrack hook uninstall [--project]` | Removes the hook. |
 | `ptrack notify [on\|off\|min-seconds N\|test]` | Desktop notification when a job ends. |
+| `ptrack notify webhook URL\|off`, `ptrack notify webhook-format json\|text` | Also POST each finished job to a web address. |
 
 Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
 `-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--agent`, `--session`.

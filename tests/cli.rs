@@ -477,3 +477,120 @@ fn notify_settings_are_saved_and_validated() {
     let out = h.ptrack(&["run", "-q", "-s", "--", "echo still works"]);
     assert!(out.status.success());
 }
+
+/// A one-request web server for webhook tests. Returns its URL and a channel
+/// that receives the request body. With `respond: false` it never answers
+/// (a hanging webhook).
+fn fake_webhook(respond: bool) -> (String, std::sync::mpsc::Receiver<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/hook", listener.local_addr().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let mut data = Vec::new();
+        let mut buf = [0u8; 4096];
+        let body = loop {
+            let n = stream.read(&mut buf).unwrap_or(0);
+            if n == 0 {
+                break String::new();
+            }
+            data.extend_from_slice(&buf[..n]);
+            let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&data[..end]).to_ascii_lowercase();
+            let len: usize = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            if data.len() >= end + 4 + len {
+                break String::from_utf8_lossy(&data[end + 4..end + 4 + len]).into_owned();
+            }
+        };
+        if respond {
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        } else {
+            sleep(Duration::from_secs(20));
+        }
+        let _ = tx.send(body);
+    });
+    (url, rx)
+}
+
+#[test]
+fn webhook_receives_finished_jobs() {
+    let h = Home::new("webhook");
+    let (url, received) = fake_webhook(true);
+    assert!(h.ptrack(&["notify", "webhook", &url]).status.success());
+    assert!(h.ptrack(&["notify", "min-seconds", "0"]).status.success());
+
+    let out = h.ptrack(&["run", "-q", "-l", "hooked", "-s", "--", "echo delivered"]);
+    assert!(out.status.success());
+    let body = received
+        .recv_timeout(Duration::from_secs(20))
+        .expect("webhook called");
+    let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(payload["job"]["label"], "hooked");
+    assert_eq!(payload["job"]["state"], "passed");
+    assert!(
+        payload["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Job passed: hooked")
+    );
+    assert_eq!(payload["content"], payload["text"]);
+}
+
+#[test]
+fn webhook_test_command_reports_delivery_and_bad_urls_are_refused() {
+    let h = Home::new("webhook-test");
+    let (url, received) = fake_webhook(true);
+    assert!(h.ptrack(&["notify", "webhook", &url]).status.success());
+    assert!(
+        h.ptrack(&["notify", "webhook-format", "text"])
+            .status
+            .success()
+    );
+    let out = h.ptrack(&["notify", "test"]);
+    assert!(out.status.success(), "{out:?}");
+    let body = received.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert!(body.starts_with("Job passed: ptrack test\n"), "{body}");
+
+    for bad in [
+        "file:///etc/passwd",
+        "-o/tmp/x",
+        "ftp://example.com",
+        "http://a b",
+    ] {
+        assert_eq!(
+            h.ptrack(&["notify", "webhook", bad]).status.code(),
+            Some(2),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn a_hanging_webhook_does_not_delay_the_command() {
+    let h = Home::new("webhook-slow");
+    let (url, _received) = fake_webhook(false);
+    assert!(h.ptrack(&["notify", "webhook", &url]).status.success());
+    assert!(h.ptrack(&["notify", "min-seconds", "0"]).status.success());
+    // `output()` waits until every copy of the output pipe is closed, exactly
+    // like an agent capturing the command. curl must not hold it open.
+    let started = std::time::Instant::now();
+    let out = h.ptrack(&["run", "-q", "-s", "--", "echo quick"]);
+    assert!(out.status.success());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "took {:?}: the notifier kept the caller's pipe open",
+        started.elapsed()
+    );
+}

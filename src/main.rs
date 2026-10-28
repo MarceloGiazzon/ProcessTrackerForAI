@@ -37,6 +37,8 @@ USAGE
   ptrack hook uninstall [--project]             remove that hook again
   ptrack notify [on|off|min-seconds N|test]     desktop notification when a job ends
                                                 (off by default; only jobs >= 30 s)
+  ptrack notify webhook URL|off                 also POST each finished job to URL
+  ptrack notify webhook-format json|text        JSON (Slack, Discord, scripts) or plain text
 
 RUN OPTIONS
   -l, --label TEXT    a human-readable name for the job
