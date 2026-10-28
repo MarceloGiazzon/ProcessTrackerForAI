@@ -15,7 +15,7 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -34,7 +34,7 @@ jobs:
           - { os: macos-latest,     target: x86_64-apple-darwin }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Rust
         run: rustup update stable && rustup default stable && rustup target add ${{ matrix.target }}
       - name: Install musl tools
@@ -59,5 +59,15 @@ jobs:
           tar czf "$name" -C "target/${{ matrix.target }}/release" ptrack -C "$GITHUB_WORKSPACE" README.md LICENSE
           shasum -a 256 "$name" > "$name.sha256"
           gh release upload "$GITHUB_REF_NAME" "$name" "$name.sha256" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Only reached when every platform built; then the release becomes public
+  # and install.sh / install.ps1 pick it up as "latest".
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
         env:
           GH_TOKEN: ${{ github.token }}
