@@ -1,0 +1,467 @@
+From dd0557f929504acecf51e0936e8eeb059227341d Mon Sep 17 00:00:00 2001
+From: plan-reference <plan@example.invalid>
+Date: Tue, 27 Oct 2026 22:36:48 -0300
+Subject: [PATCH] Add ptrack rerun (CLI, dashboard button, MCP job_rerun)
+
+---
+ README.md        |  2 ++
+ src/commands.rs  | 50 ++++++++++++++++++++++++++++++-
+ src/job.rs       |  4 +++
+ src/main.rs      | 17 +++++++++++
+ src/mcp.rs       | 10 +++++++
+ src/supervise.rs | 78 ++++++++++++++++++++++++++++++++++--------------
+ src/ui.html      |  4 +++
+ src/web.rs       |  1 +
+ tests/cli.rs     | 59 +++++++++++++++++++++++++++++++++++-
+ 9 files changed, 201 insertions(+), 24 deletions(-)
+
+diff --git a/README.md b/README.md
+index fa5212f..69c2e8e 100644
+--- a/README.md
++++ b/README.md
+@@ -71,6 +71,7 @@ ptrack tail k3f9a2 -f       # watch its output
+ ptrack wait k3f9a2          # wait for it; exits with the job's own exit code
+ ptrack pause k3f9a2         # freeze it (ptrack resume k3f9a2 to continue)
+ ptrack stop k3f9a2          # stop it and everything it started
++ptrack rerun k3f9a2         # run the same command again (in the same folder)
+ ```
+ 
+ `ptrack list` looks like this:
+@@ -173,6 +174,7 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other
+ | `ptrack wait [ID] [--timeout SECS] [-n LINES]` | Blocks until the job ends. Exits with its code, or 124 on timeout. |
+ | `ptrack stop ID [--grace SECS] [--force]` | Asks the job to exit, then force-stops the whole tree after the grace time (default 5 s). |
+ | `ptrack pause ID`, `ptrack resume ID` | Freezes and unfreezes every process of the job. |
++| `ptrack rerun ID [-d] [-q]` | Runs a finished job's command again, in the same folder, as a new job linked to the old one. |
+ | `ptrack prune [--days N] [--all]` | Deletes finished jobs and their logs (default: older than 7 days). |
+ | `ptrack ui [--port N] [--no-open]` | Live dashboard in your browser (this computer only). |
+ | `ptrack mcp [--allow-control]` | MCP server over stdio for AI agents. |
+diff --git a/src/commands.rs b/src/commands.rs
+index 6e9addb..9881868 100644
+--- a/src/commands.rs
++++ b/src/commands.rs
+@@ -9,7 +9,7 @@ use std::time::Duration;
+ 
+ use crate::job::{self, Job, State};
+ use crate::platform;
+-use crate::supervise::summary;
++use crate::supervise::{self, RunOpts, summary};
+ use crate::util::{fmt_duration, last_lines, now_ms, truncate};
+ 
+ type CmdResult = Result<i32, String>;
+@@ -140,6 +140,9 @@ pub fn status(id: Option<&str>, json: bool) -> CmdResult {
+     if let Some(p) = &j.prompt {
+         row("prompt", p);
+     }
++    if let Some(r) = &j.rerun_of {
++        row("rerun of", r);
++    }
+     row(
+         "started",
+         &format!(
+@@ -394,3 +397,48 @@ pub fn prune(older_than_days: u64) -> CmdResult {
+     println!("removed {removed} finished job(s)");
+     Ok(0)
+ }
++
++/// The options that run `j`'s command again, in the same folder, as a new
++/// job linked to the old one. Refuses while `j` is still active.
++pub fn rerun_opts(j: &Job) -> Result<RunOpts, String> {
++    let state = j.effective_state();
++    if state.is_active() {
++        return Err(format!(
++            "job {} is still {}; stop it first (ptrack stop {})",
++            j.id,
++            state.as_str(),
++            j.id
++        ));
++    }
++    Ok(RunOpts {
++        label: j.label.clone(),
++        shell: j.shell,
++        command: j.command.clone(),
++        cwd: Some(j.cwd.clone()),
++        rerun_of: Some(j.id.clone()),
++        ..RunOpts::default()
++    })
++}
++
++pub fn rerun(id: &str, detach: bool, quiet: bool) -> CmdResult {
++    let j = job::resolve(Some(id))?;
++    let mut opts = rerun_opts(&j)?;
++    opts.detach = detach;
++    opts.quiet = quiet;
++    Ok(supervise::run(opts))
++}
++
++/// Starts a rerun in the background; returns a one-line message with the new id.
++/// Used by the dashboard and the MCP server.
++pub fn rerun_detached(j: &Job) -> Result<String, String> {
++    let opts = rerun_opts(j)?;
++    match supervise::start_detached(&opts)? {
++        supervise::Detached::Started(new) => {
++            Ok(format!("started job {} (rerun of {})", new.id, j.id))
++        }
++        supervise::Detached::NotYetReported(new_id) => Ok(format!(
++            "launched job {new_id} (rerun of {}); it has not reported yet",
++            j.id
++        )),
++    }
++}
+diff --git a/src/job.rs b/src/job.rs
+index af9c942..df5c2a4 100644
+--- a/src/job.rs
++++ b/src/job.rs
+@@ -66,6 +66,9 @@ pub struct Job {
+     /// Start of that prompt's text, when the agent integration recorded it.
+     #[serde(default)]
+     pub prompt: Option<String>,
++    /// Set when this job was started by `ptrack rerun` of another job.
++    #[serde(default)]
++    pub rerun_of: Option<String>,
+     pub state: State,
+     pub exit_code: Option<i32>,
+     pub started_at: String,
+@@ -171,6 +174,7 @@ impl Job {
+             session: None,
+             prompt_id: None,
+             prompt: None,
++            rerun_of: None,
+             state: State::Running,
+             exit_code: None,
+             started_at: iso_utc(now),
+diff --git a/src/main.rs b/src/main.rs
+index c9e6461..aa20db0 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -25,6 +25,7 @@ USAGE
+   ptrack wait [ID] [--timeout SECS] [-n LINES]  block until the job ends; exits with its code
+   ptrack stop ID [--grace SECS] [--force]       stop the job and everything it started
+   ptrack pause ID | ptrack resume ID            freeze / unfreeze the whole job
++  ptrack rerun ID [-d] [-q]                     run a finished job's command again (same folder)
+   ptrack prune [--days N] [--all]               delete finished jobs (default: older than 7 days)
+   ptrack ui [--port N] [--no-open]              live dashboard in your browser (this computer only)
+   ptrack mcp [--allow-control]                  MCP server for AI agents (stdio); read-only unless
+@@ -136,6 +137,20 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
+             p.no_more()?;
+             commands::stop(&id, grace * 1000)
+         }
++        "rerun" => {
++            let mut p = Parser::new(args);
++            let (mut detach, mut quiet) = (false, false);
++            while let Some(a) = p.next_flag()? {
++                match a.as_str() {
++                    "-d" | "--detach" => detach = true,
++                    "-q" | "--quiet" => quiet = true,
++                    _ => return Err(unknown(&a)),
++                }
++            }
++            let id = p.required_id("rerun")?;
++            p.no_more()?;
++            commands::rerun(&id, detach, quiet)
++        }
+         "pause" | "resume" => {
+             let mut p = Parser::new(args);
+             if let Some(a) = p.next_flag()? {
+@@ -237,6 +252,8 @@ fn parse_run(args: VecDeque<String>) -> Result<RunOpts, String> {
+             "--agent" => opts.agent = Some(p.value(&a)?),
+             "--session" => opts.session = Some(p.value(&a)?),
+             "--prompt-id" => opts.prompt_id = Some(p.value(&a)?),
++            "--cwd" => opts.cwd = Some(p.value(&a)?),
++            "--rerun-of" => opts.rerun_of = Some(p.value(&a)?),
+             "--background" => opts.background = true,
+             "--job-id" => opts.job_id = Some(p.value(&a)?),
+             _ => return Err(format!("{} (put the command after --)", unknown(&a))),
+diff --git a/src/mcp.rs b/src/mcp.rs
+index ad01980..98347cc 100644
+--- a/src/mcp.rs
++++ b/src/mcp.rs
+@@ -149,6 +149,11 @@ fn tool_list(allow_control: bool) -> Vec<Value> {
+             "description": "Unfreeze a paused job.",
+             "inputSchema": { "type": "object", "properties": { "id": id_param() }, "required": ["id"] }
+         }));
++        tools.push(json!({
++            "name": "job_rerun",
++            "description": "Run a finished job's command again, in the same folder, as a new background job. Returns the new job id.",
++            "inputSchema": { "type": "object", "properties": { "id": id_param() }, "required": ["id"] }
++        }));
+     }
+     tools
+ }
+@@ -248,6 +253,11 @@ fn call_tool(name: &str, args: &Value, allow_control: bool) -> Result<String, St
+             commands::resume_job(&j)?;
+             Ok(format!("resumed job {}", j.id))
+         }
++        "job_rerun" => {
++            control("job_rerun")?;
++            let j = id()?;
++            commands::rerun_detached(&j)
++        }
+         _ => Err(format!("unknown tool '{name}'")),
+     }
+ }
+diff --git a/src/supervise.rs b/src/supervise.rs
+index c86c620..ef13c3f 100644
+--- a/src/supervise.rs
++++ b/src/supervise.rs
+@@ -24,6 +24,10 @@ pub struct RunOpts {
+     pub agent: Option<String>,
+     pub session: Option<String>,
+     pub prompt_id: Option<String>,
++    /// Folder to run in (default: the current folder). Used by `rerun`.
++    pub cwd: Option<String>,
++    /// Id of the job this one repeats (`ptrack rerun`).
++    pub rerun_of: Option<String>,
+     pub shell: bool,
+     pub detach: bool,
+     pub quiet: bool,
+@@ -43,12 +47,24 @@ pub fn run(opts: RunOpts) -> i32 {
+         return 1;
+     }
+     if opts.detach && !opts.background {
+-        return detach(opts);
++        return detach(&opts);
+     }
+     supervise(opts)
+ }
+ 
+-fn detach(opts: RunOpts) -> i32 {
++/// What `start_detached` found once the background supervisor started.
++pub enum Detached {
++    /// The job file exists; the job is running (or already ended).
++    Started(Box<Job>),
++    /// The supervisor started but has not written the job file within 5 s.
++    NotYetReported(String),
++}
++
++/// Starts the job in a background copy of ptrack and waits until it has
++/// written its job file, so an immediate `ptrack status` finds it.
++/// Used by `ptrack run -d`, `ptrack rerun -d`, the dashboard and MCP.
++pub fn start_detached(opts: &RunOpts) -> Result<Detached, String> {
++    job::ensure_dirs().map_err(|e| format!("cannot create data folder: {e}"))?;
+     let id = job::fresh_id();
+     let mut args: Vec<OsString> = vec![
+         "run".into(),
+@@ -61,6 +77,8 @@ fn detach(opts: RunOpts) -> i32 {
+         ("--agent", &opts.agent),
+         ("--session", &opts.session),
+         ("--prompt-id", &opts.prompt_id),
++        ("--cwd", &opts.cwd),
++        ("--rerun-of", &opts.rerun_of),
+     ] {
+         if let Some(v) = value {
+             args.push(flag.into());
+@@ -73,39 +91,48 @@ fn detach(opts: RunOpts) -> i32 {
+     args.push("--".into());
+     args.extend(opts.command.iter().map(OsString::from));
+ 
+-    let exe = match std::env::current_exe() {
+-        Ok(e) => e,
+-        Err(e) => {
+-            eprintln!("ptrack: cannot find own executable: {e}");
+-            return 1;
+-        }
+-    };
+-    if let Err(e) = platform::spawn_detached(&exe, &args) {
+-        eprintln!("ptrack: could not start background supervisor: {e}");
+-        return 1;
+-    }
+-    // Wait until the supervisor has written the job file, so an immediate
+-    // `ptrack status` finds it.
++    let exe = std::env::current_exe().map_err(|e| format!("cannot find own executable: {e}"))?;
++    platform::spawn_detached(&exe, &args)
++        .map_err(|e| format!("could not start background supervisor: {e}"))?;
+     let deadline = now_ms() + 5_000;
+     loop {
+         if let Ok(job) = Job::load(&id) {
+             if job.state == State::Failed && job.pid.is_none() {
+-                println!(
++                return Err(format!(
+                     "job {id} failed to start: {}",
+                     job.error.unwrap_or_default()
+-                );
+-                return 127;
++                ));
+             }
++            return Ok(Detached::Started(Box::new(job)));
++        }
++        if now_ms() > deadline {
++            return Ok(Detached::NotYetReported(id));
++        }
++        thread::sleep(Duration::from_millis(50));
++    }
++}
++
++fn detach(opts: &RunOpts) -> i32 {
++    match start_detached(opts) {
++        Ok(Detached::Started(job)) => {
++            let id = &job.id;
+             println!("job {id} started in background");
+             println!("  log:   {}", job.log_path);
+             println!("  check: ptrack status {id}   |   ptrack wait {id}");
+-            return 0;
++            0
+         }
+-        if now_ms() > deadline {
++        Ok(Detached::NotYetReported(id)) => {
+             println!("job {id} launched, but has not reported yet; check with: ptrack status {id}");
+-            return 0;
++            0
++        }
++        Err(msg) if msg.contains("failed to start") => {
++            println!("{msg}");
++            127
++        }
++        Err(msg) => {
++            eprintln!("ptrack: {msg}");
++            1
+         }
+-        thread::sleep(Duration::from_millis(50));
+     }
+ }
+ 
+@@ -133,6 +160,10 @@ fn supervise(opts: RunOpts) -> i32 {
+     (job.agent, job.session) = detect_agent(&opts);
+     job.prompt_id = opts.prompt_id.clone();
+     job.prompt = opts.prompt_id.as_deref().and_then(job::prompt_preview);
++    job.rerun_of = opts.rerun_of.clone();
++    if let Some(dir) = &opts.cwd {
++        job.cwd = dir.clone();
++    }
+     let echo = !opts.background && !opts.quiet;
+     let speak = !opts.background;
+ 
+@@ -155,6 +186,9 @@ fn supervise(opts: RunOpts) -> i32 {
+         c.args(&opts.command[1..]);
+         c
+     };
++    if let Some(dir) = &opts.cwd {
++        cmd.current_dir(dir);
++    }
+     cmd.stdin(Stdio::null())
+         .stdout(Stdio::piped())
+         .stderr(Stdio::piped());
+diff --git a/src/ui.html b/src/ui.html
+index 43d0085..720b8fd 100644
+--- a/src/ui.html
++++ b/src/ui.html
+@@ -148,6 +148,7 @@ function toast(msg) {
+ 
+ async function act(job, action, button) {
+   if (action === "stop" && !confirm("Stop job " + job.id + " and everything it started?")) return;
++  if (action === "rerun" && !confirm("Run this again in " + job.cwd + "?\n\n" + title(job))) return;
+   button.disabled = true;
+   try {
+     const r = await api("/api/jobs/" + job.id + "/" + action, { method: "POST" });
+@@ -172,6 +173,7 @@ function renderJob(j) {
+     el("span", {}, "started " + dur(Date.now() - j.started_ms) + " ago"),
+     j.agent ? el("span", {}, "by " + j.agent.split("_")[0]) : null,
+     j.exit_code != null ? el("span", {}, "exit " + j.exit_code) : null,
++    j.rerun_of ? el("span", {}, "rerun of #" + j.rerun_of) : null,
+     el("span", { title: j.cwd }, j.cwd.split(/[\\/]/).filter(Boolean).pop() || j.cwd),
+   );
+   const actions = el("div", { class: "actions" });
+@@ -183,6 +185,8 @@ function renderJob(j) {
+   }
+   if (active) {
+     actions.append(el("button", { class: "danger", onclick: (e) => { e.stopPropagation(); act(j, "stop", e.target); } }, "Stop"));
++  } else {
++    actions.append(el("button", { onclick: (e) => { e.stopPropagation(); act(j, "rerun", e.target); } }, "Rerun"));
+   }
+   const toggle = () => {
+     openJob = openJob === j.id ? null : j.id;
+diff --git a/src/web.rs b/src/web.rs
+index e76a2bb..4561e40 100644
+--- a/src/web.rs
++++ b/src/web.rs
+@@ -159,6 +159,7 @@ fn handle(mut stream: TcpStream, token: &str, hosts: &[String]) -> std::io::Resu
+                 }),
+                 "pause" => commands::pause_job(&j).map(|_| format!("paused job {}", j.id)),
+                 "resume" => commands::resume_job(&j).map(|_| format!("resumed job {}", j.id)),
++                "rerun" => commands::rerun_detached(&j),
+                 other => Err(format!("unknown action '{other}'")),
+             });
+             let (code, body) = match result {
+diff --git a/tests/cli.rs b/tests/cli.rs
+index 4c66610..7d8f4cb 100644
+--- a/tests/cli.rs
++++ b/tests/cli.rs
+@@ -234,7 +234,7 @@ fn mcp_server_lists_jobs_and_guards_control_tools() {
+         true,
+         &[serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})],
+     );
+-    assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 7);
++    assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 8);
+ }
+ 
+ #[test]
+@@ -300,6 +300,9 @@ fn dashboard_requires_token_and_local_host() {
+     let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+     assert_eq!(data["jobs"][0]["state"], "passed");
+     assert_eq!(http("POST", "/api/jobs/last/resume", &host, &token).0, 409);
++    let (code, body) = http("POST", "/api/jobs/last/rerun", &host, &token);
++    assert_eq!(code, 200, "{body}");
++    assert!(body.contains("rerun of"), "{body}");
+ 
+     let _ = child.kill();
+     let _ = child.wait();
+@@ -384,3 +387,57 @@ fn claude_code_hook_wraps_long_commands_and_links_prompts() {
+         assert_eq!(job["state"], "failed");
+     }
+ }
++
++#[test]
++fn rerun_repeats_the_command_in_the_same_folder() {
++    let h = Home::new("rerun");
++    let project = h.0.join("project");
++    std::fs::create_dir_all(&project).unwrap();
++    let first = Command::new(env!("CARGO_BIN_EXE_ptrack"))
++        .args([
++            "run",
++            "-q",
++            "-l",
++            "flaky",
++            "-s",
++            "--",
++            "echo x> here.txt && exit 2",
++        ])
++        .current_dir(&project)
++        .env("PTRACK_HOME", &h.0)
++        .output()
++        .unwrap();
++    assert_eq!(first.status.code(), Some(2));
++    let first = h.json(&["status", "--json"]);
++    std::fs::remove_file(project.join("here.txt")).unwrap();
++
++    // Rerun from a different folder: the command must still run in `project`.
++    let out = h.ptrack(&["rerun", first["id"].as_str().unwrap(), "-q"]);
++    assert_eq!(
++        out.status.code(),
++        Some(2),
++        "rerun returns the command's exit code"
++    );
++    assert!(
++        project.join("here.txt").exists(),
++        "ran in the original folder"
++    );
++
++    let second = h.json(&["status", "--json"]);
++    assert_ne!(second["id"], first["id"]);
++    assert_eq!(second["rerun_of"], first["id"]);
++    assert_eq!(second["label"], "flaky");
++    assert_eq!(second["cwd"], first["cwd"]);
++    assert_eq!(second["command"], first["command"]);
++}
++
++#[test]
++fn rerun_refuses_a_job_that_is_still_running() {
++    let h = Home::new("rerun-active");
++    let id = h.detach(LONG);
++    sleep(Duration::from_millis(500));
++    let out = h.ptrack(&["rerun", &id]);
++    assert_eq!(out.status.code(), Some(2));
++    assert!(String::from_utf8_lossy(&out.stderr).contains("still running"));
++    h.ptrack(&["stop", &id, "--force"]);
++}
+-- 
+2.56.0.windows.2
+

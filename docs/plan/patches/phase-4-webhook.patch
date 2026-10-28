@@ -1,0 +1,440 @@
+From 040d658dc6903931dd066bdf8f8ab17f61556304 Mon Sep 17 00:00:00 2001
+From: plan-reference <plan@example.invalid>
+Date: Tue, 27 Oct 2026 22:44:22 -0300
+Subject: [PATCH] Webhook notifications when a job ends (ptrack notify webhook)
+
+---
+ README.md     |  17 +++++
+ src/config.rs |  16 +++++
+ src/main.rs   |   2 +
+ src/notify.rs | 167 ++++++++++++++++++++++++++++++++++++++++++++------
+ tests/cli.rs  | 117 +++++++++++++++++++++++++++++++++++
+ 5 files changed, 300 insertions(+), 19 deletions(-)
+
+diff --git a/README.md b/README.md
+index 721a176..aa964ae 100644
+--- a/README.md
++++ b/README.md
+@@ -131,6 +131,22 @@ what each system already has: PowerShell on Windows, where the notification says
+ "Windows PowerShell"; `osascript` on macOS; and `notify-send` on Linux. If `notify-send` is
+ missing on Ubuntu, install it with `sudo apt install libnotify-bin`.
+ 
++To get a message on your phone or in a chat when a job ends, add a **webhook**. ptrack then POSTs
++every finished job to that address. It uses `curl`, which Windows 10+, macOS and Linux already
++have:
++
++```sh
++ptrack notify webhook https://hooks.slack.com/services/...   # Slack or Discord: works as is
++ptrack notify webhook https://ntfy.sh/my-secret-topic        # ntfy phone app: also run
++ptrack notify webhook-format text                            #   (plain text instead of JSON)
++ptrack notify test                                           # send a test message now
++ptrack notify webhook off
++```
++
++The JSON payload has `text` (read by Slack), `content` (read by Discord) and `job` (the full job
++record, for your own scripts). Webhook messages include the command line and its last output line,
++so only send them to a service you trust.
++
+ ## MCP server (for agents)
+ 
+ `ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
+@@ -200,6 +216,7 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other
+ | `ptrack hook install [--project] [--all] [--no-prompts]` | Claude Code hook: long commands run through ptrack automatically. |
+ | `ptrack hook uninstall [--project]` | Removes the hook. |
+ | `ptrack notify [on\|off\|min-seconds N\|test]` | Desktop notification when a job ends. |
++| `ptrack notify webhook URL\|off`, `ptrack notify webhook-format json\|text` | Also POST each finished job to a web address. |
+ 
+ Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
+ `-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--agent`, `--session`.
+diff --git a/src/config.rs b/src/config.rs
+index fecd3d0..c78409e 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -22,6 +22,9 @@ pub struct NotifyConfig {
+     pub desktop: bool,
+     /// Only jobs that ran at least this many seconds trigger notifications.
+     pub min_seconds: u64,
++    /// Also POST each finished job to this http(s) URL.
++    pub webhook: Option<String>,
++    pub webhook_format: WebhookFormat,
+ }
+ 
+ impl Default for NotifyConfig {
+@@ -29,10 +32,23 @@ impl Default for NotifyConfig {
+         NotifyConfig {
+             desktop: false,
+             min_seconds: 30,
++            webhook: None,
++            webhook_format: WebhookFormat::Json,
+         }
+     }
+ }
+ 
++#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
++#[serde(rename_all = "lowercase")]
++pub enum WebhookFormat {
++    /// `{"text": ..., "content": ..., "job": {...}}`: Slack reads `text`,
++    /// Discord reads `content`, scripts read `job`.
++    #[default]
++    Json,
++    /// Two plain lines (title, details), e.g. for ntfy.sh.
++    Text,
++}
++
+ pub fn path() -> PathBuf {
+     job::home().join("config.json")
+ }
+diff --git a/src/main.rs b/src/main.rs
+index 05714ea..00e205c 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -37,6 +37,8 @@ USAGE
+   ptrack hook uninstall [--project]             remove that hook again
+   ptrack notify [on|off|min-seconds N|test]     desktop notification when a job ends
+                                                 (off by default; only jobs >= 30 s)
++  ptrack notify webhook URL|off                 also POST each finished job to URL
++  ptrack notify webhook-format json|text        JSON (Slack, Discord, scripts) or plain text
+ 
+ RUN OPTIONS
+   -l, --label TEXT    a human-readable name for the job
+diff --git a/src/notify.rs b/src/notify.rs
+index 1fb669a..448d895 100644
+--- a/src/notify.rs
++++ b/src/notify.rs
+@@ -6,10 +6,17 @@
+ //! nothing has to be installed: PowerShell (Windows), osascript (macOS),
+ //! notify-send (Linux desktops). Job text is passed through environment
+ //! variables or arguments, never pasted into script source.
++//!
++//! Webhooks are sent with curl, which ships with Windows 10+, macOS and
++//! practically every Linux. The payload goes through curl's stdin.
+ 
++use std::io::Write;
++use std::path::PathBuf;
+ use std::process::{Command, Stdio};
+ 
+-use crate::config::{self, Config};
++use serde_json::json;
++
++use crate::config::{self, Config, WebhookFormat};
+ use crate::job::{Job, State};
+ use crate::util::{fmt_duration, truncate};
+ 
+@@ -47,6 +54,91 @@ pub fn job_finished(job: &Job) {
+             let _ = cmd.spawn();
+         }
+     }
++    if let Some(url) = &cfg.webhook {
++        let (content_type, payload) = webhook_payload(job, cfg.webhook_format, &title, &body);
++        let _ = send_webhook(url, &content_type, &payload, false);
++    }
++}
++
++/// The body to POST and its content type.
++pub fn webhook_payload(
++    job: &Job,
++    format: WebhookFormat,
++    title: &str,
++    body: &str,
++) -> (String, String) {
++    let text = format!("{title}\n{body}");
++    match format {
++        WebhookFormat::Json => (
++            "application/json".into(),
++            json!({ "text": text, "content": text, "job": crate::commands::to_json(job) })
++                .to_string(),
++        ),
++        WebhookFormat::Text => ("text/plain; charset=utf-8".into(), text),
++    }
++}
++
++/// Only plain web addresses: anything else could be read by curl as an
++/// option or a local file.
++pub fn valid_webhook_url(url: &str) -> bool {
++    (url.starts_with("https://") || url.starts_with("http://"))
++        && !url.chars().any(char::is_whitespace)
++}
++
++fn curl_program() -> PathBuf {
++    // Prefer Windows' own curl over whatever else is first on PATH.
++    #[cfg(windows)]
++    if let Some(root) = std::env::var_os("SystemRoot") {
++        let builtin = PathBuf::from(root).join("System32").join("curl.exe");
++        if builtin.is_file() {
++            return builtin;
++        }
++    }
++    PathBuf::from("curl")
++}
++
++/// POSTs `payload` to `url`. With `wait`, reports whether it was delivered;
++/// without, returns as soon as curl has the data (curl gives up after 10 s).
++fn send_webhook(url: &str, content_type: &str, payload: &str, wait: bool) -> Result<(), String> {
++    if !valid_webhook_url(url) {
++        return Err(format!("not an http(s) address: {url}"));
++    }
++    let mut cmd = Command::new(curl_program());
++    cmd.args(["--silent", "--show-error", "--fail", "--max-time", "10"])
++        .args(["--request", "POST", "--header"])
++        .arg(format!("Content-Type: {content_type}"))
++        // No "Expect: 100-continue" round trip (adds a 1 s wait on many servers).
++        .args(["--header", "Expect:"])
++        .args(["--data-binary", "@-", "--url", url])
++        .stdin(Stdio::piped())
++        .stdout(Stdio::null())
++        .stderr(if wait { Stdio::piped() } else { Stdio::null() });
++    #[cfg(windows)]
++    {
++        use std::os::windows::process::CommandExt;
++        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
++    }
++    let mut child = cmd
++        .spawn()
++        .map_err(|e| format!("could not run curl: {e}"))?;
++    if let Some(mut stdin) = child.stdin.take() {
++        let _ = stdin.write_all(payload.as_bytes());
++        // Dropping stdin here ends the upload.
++    }
++    if !wait {
++        return Ok(());
++    }
++    let out = child
++        .wait_with_output()
++        .map_err(|e| format!("curl failed: {e}"))?;
++    if out.status.success() {
++        Ok(())
++    } else {
++        Err(format!(
++            "webhook not delivered: {}",
++            String::from_utf8_lossy(&out.stderr).trim()
++        ))
++    }
+ }
+ 
+ /// `("Job failed: npm test", "took 3m04s · exit 1\nnpm ERR! ...")`
+@@ -105,7 +197,9 @@ fn desktop_command(title: &str, body: &str) -> Option<Command> {
+     Some(cmd)
+ }
+ 
+-/// `ptrack notify [on | off | min-seconds N | test]`
++const USAGE: &str = "usage: ptrack notify [on | off | min-seconds N | webhook URL | webhook off | webhook-format json|text | test]";
++
++/// `ptrack notify ...`: show or change notification settings, or send a test.
+ pub fn command(args: &[String]) -> Result<i32, String> {
+     let mut cfg = config::load_checked()?;
+     let words: Vec<&str> = args.iter().map(String::as_str).collect();
+@@ -121,8 +215,19 @@ pub fn command(args: &[String]) -> Result<i32, String> {
+                 .parse()
+                 .map_err(|_| format!("min-seconds needs a number, got '{n}'"))?;
+         }
+-        ["test"] => return send_test(),
+-        _ => return Err("usage: ptrack notify [on | off | min-seconds N | test]".into()),
++        ["webhook", "off"] => cfg.notify.webhook = None,
++        ["webhook", url] => {
++            if !valid_webhook_url(url) {
++                return Err(format!(
++                    "the webhook must be an http:// or https:// address, got '{url}'"
++                ));
++            }
++            cfg.notify.webhook = Some(url.to_string());
++        }
++        ["webhook-format", "json"] => cfg.notify.webhook_format = WebhookFormat::Json,
++        ["webhook-format", "text"] => cfg.notify.webhook_format = WebhookFormat::Text,
++        ["test"] => return send_test(&cfg),
++        _ => return Err(USAGE.into()),
+     }
+     config::save(&cfg).map_err(|e| format!("cannot save settings: {e}"))?;
+     show(&cfg);
+@@ -135,25 +240,49 @@ fn show(cfg: &Config) {
+         "desktop notifications: {}",
+         if n.desktop { "on" } else { "off" }
+     );
++    match &n.webhook {
++        Some(url) => println!("webhook: {url} ({:?})", n.webhook_format),
++        None => println!("webhook: off"),
++    }
+     println!("only for jobs that ran at least: {}s", n.min_seconds);
+     println!("settings file: {}", config::path().display());
+ }
+ 
+-fn send_test() -> Result<i32, String> {
+-    let mut cmd = desktop_command("Job passed: ptrack test", "Notifications work.")
+-        .ok_or("desktop notifications are not supported on this system")?;
+-    let status = cmd.status().map_err(|e| {
+-        let hint = if cfg!(all(unix, not(target_os = "macos"))) {
+-            " (on Ubuntu/Debian: sudo apt install libnotify-bin)"
+-        } else {
+-            ""
+-        };
+-        format!("could not run the notifier: {e}{hint}")
+-    })?;
+-    if !status.success() {
+-        return Err(format!("the notifier failed ({status})"));
+-    }
+-    println!("sent a test notification; you should see it now");
++/// Sends a test desktop notification (when desktop notifications are on, or
++/// nothing else is configured) and a test webhook (when one is set).
++fn send_test(cfg: &Config) -> Result<i32, String> {
++    let n = &cfg.notify;
++    let mut job = Job::new(
++        "test00".into(),
++        vec!["ptrack".into(), "notify".into()],
++        false,
++    );
++    job.label = Some("ptrack test".into());
++    job.last_line = Some("Notifications work.".into());
++    job.finish(State::Passed, Some(0));
++    let (title, body) = message(&job);
++
++    if n.desktop || n.webhook.is_none() {
++        let mut cmd = desktop_command(&title, &body)
++            .ok_or("desktop notifications are not supported on this system")?;
++        let status = cmd.status().map_err(|e| {
++            let hint = if cfg!(all(unix, not(target_os = "macos"))) {
++                " (on Ubuntu/Debian: sudo apt install libnotify-bin)"
++            } else {
++                ""
++            };
++            format!("could not run the notifier: {e}{hint}")
++        })?;
++        if !status.success() {
++            return Err(format!("the notifier failed ({status})"));
++        }
++        println!("sent a test desktop notification; you should see it now");
++    }
++    if let Some(url) = &n.webhook {
++        let (content_type, payload) = webhook_payload(&job, n.webhook_format, &title, &body);
++        send_webhook(url, &content_type, &payload, true)?;
++        println!("delivered a test message to {url}");
++    }
+     Ok(0)
+ }
+ 
+diff --git a/tests/cli.rs b/tests/cli.rs
+index 96f38d5..6e0cd44 100644
+--- a/tests/cli.rs
++++ b/tests/cli.rs
+@@ -476,3 +476,120 @@ fn notify_settings_are_saved_and_validated() {
+     let out = h.ptrack(&["run", "-q", "-s", "--", "echo still works"]);
+     assert!(out.status.success());
+ }
++
++/// A one-request web server for webhook tests. Returns its URL and a channel
++/// that receives the request body. With `respond: false` it never answers
++/// (a hanging webhook).
++fn fake_webhook(respond: bool) -> (String, std::sync::mpsc::Receiver<String>) {
++    use std::io::{Read, Write};
++    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
++    let url = format!("http://{}/hook", listener.local_addr().unwrap());
++    let (tx, rx) = std::sync::mpsc::channel();
++    std::thread::spawn(move || {
++        let Ok((mut stream, _)) = listener.accept() else {
++            return;
++        };
++        stream
++            .set_read_timeout(Some(Duration::from_secs(15)))
++            .unwrap();
++        let mut data = Vec::new();
++        let mut buf = [0u8; 4096];
++        let body = loop {
++            let n = stream.read(&mut buf).unwrap_or(0);
++            if n == 0 {
++                break String::new();
++            }
++            data.extend_from_slice(&buf[..n]);
++            let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
++                continue;
++            };
++            let head = String::from_utf8_lossy(&data[..end]).to_ascii_lowercase();
++            let len: usize = head
++                .lines()
++                .find_map(|l| l.strip_prefix("content-length:"))
++                .and_then(|v| v.trim().parse().ok())
++                .unwrap_or(0);
++            if data.len() >= end + 4 + len {
++                break String::from_utf8_lossy(&data[end + 4..end + 4 + len]).into_owned();
++            }
++        };
++        if respond {
++            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
++        } else {
++            sleep(Duration::from_secs(20));
++        }
++        let _ = tx.send(body);
++    });
++    (url, rx)
++}
++
++#[test]
++fn webhook_receives_finished_jobs() {
++    let h = Home::new("webhook");
++    let (url, received) = fake_webhook(true);
++    assert!(h.ptrack(&["notify", "webhook", &url]).status.success());
++    assert!(h.ptrack(&["notify", "min-seconds", "0"]).status.success());
++
++    let out = h.ptrack(&["run", "-q", "-l", "hooked", "-s", "--", "echo delivered"]);
++    assert!(out.status.success());
++    let body = received
++        .recv_timeout(Duration::from_secs(20))
++        .expect("webhook called");
++    let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
++    assert_eq!(payload["job"]["label"], "hooked");
++    assert_eq!(payload["job"]["state"], "passed");
++    assert!(
++        payload["text"]
++            .as_str()
++            .unwrap()
++            .starts_with("Job passed: hooked")
++    );
++    assert_eq!(payload["content"], payload["text"]);
++}
++
++#[test]
++fn webhook_test_command_reports_delivery_and_bad_urls_are_refused() {
++    let h = Home::new("webhook-test");
++    let (url, received) = fake_webhook(true);
++    assert!(h.ptrack(&["notify", "webhook", &url]).status.success());
++    assert!(
++        h.ptrack(&["notify", "webhook-format", "text"])
++            .status
++            .success()
++    );
++    let out = h.ptrack(&["notify", "test"]);
++    assert!(out.status.success(), "{out:?}");
++    let body = received.recv_timeout(Duration::from_secs(20)).unwrap();
++    assert!(body.starts_with("Job passed: ptrack test\n"), "{body}");
++
++    for bad in [
++        "file:///etc/passwd",
++        "-o/tmp/x",
++        "ftp://example.com",
++        "http://a b",
++    ] {
++        assert_eq!(
++            h.ptrack(&["notify", "webhook", bad]).status.code(),
++            Some(2),
++            "{bad}"
++        );
++    }
++}
++
++#[test]
++fn a_hanging_webhook_does_not_delay_the_command() {
++    let h = Home::new("webhook-slow");
++    let (url, _received) = fake_webhook(false);
++    assert!(h.ptrack(&["notify", "webhook", &url]).status.success());
++    assert!(h.ptrack(&["notify", "min-seconds", "0"]).status.success());
++    // `output()` waits until every copy of the output pipe is closed, exactly
++    // like an agent capturing the command. curl must not hold it open.
++    let started = std::time::Instant::now();
++    let out = h.ptrack(&["run", "-q", "-s", "--", "echo quick"]);
++    assert!(out.status.success());
++    assert!(
++        started.elapsed() < Duration::from_secs(5),
++        "took {:?}: the notifier kept the caller's pipe open",
++        started.elapsed()
++    );
++}
+-- 
+2.56.0.windows.2
+

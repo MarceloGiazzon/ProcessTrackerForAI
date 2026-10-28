@@ -1,0 +1,113 @@
+From 2d17f4fb7854187c3f105e18158d0b0f3f0f56f9 Mon Sep 17 00:00:00 2001
+From: plan-reference <plan@example.invalid>
+Date: Tue, 27 Oct 2026 22:37:49 -0300
+Subject: [PATCH] Dashboard: browser notifications when jobs end
+
+---
+ README.md    |  4 ++++
+ src/ui.html  | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/cli.rs |  4 ++++
+ 3 files changed, 52 insertions(+)
+
+diff --git a/README.md b/README.md
+index 69c2e8e..3d30212 100644
+--- a/README.md
++++ b/README.md
+@@ -112,6 +112,10 @@ buttons pause, resume or stop it. The page is reachable only from your own compu
+ protected by a random key in the link, which changes every time you start `ptrack ui`. Press
+ Ctrl+C in the terminal to close it. Options: `--port N` and `--no-open`.
+ 
++Tick **Notify when jobs end** to get a notification from your browser whenever a job finishes.
++This works only while the page is open. The first time, the browser asks for permission. The
++**Rerun** button on a finished job starts its command again, in the same folder.
++
+ ## MCP server (for agents)
+ 
+ `ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
+diff --git a/src/ui.html b/src/ui.html
+index 720b8fd..a808543 100644
+--- a/src/ui.html
++++ b/src/ui.html
+@@ -97,6 +97,7 @@
+   <span class="counts" id="counts"></span>
+   <span class="spacer"></span>
+   <label class="toggle"><input type="checkbox" id="all"> Show older jobs</label>
++  <label class="toggle" title="Show a notification on this computer when a job finishes (while this page is open)"><input type="checkbox" id="notify"> Notify when jobs end</label>
+   <span class="live" id="live"><span class="dot"></span><span id="live-text">live</span></span>
+ </header>
+ <main>
+@@ -240,6 +241,7 @@ async function refresh() {
+     const r = await api("/api/jobs" + (showAll ? "?all=1" : ""));
+     if (r.status === 401) throw new Error("access key not accepted; reopen the link from ptrack ui");
+     const data = await r.json();
++    notifyFinished(data.jobs);
+     const running = data.jobs.filter((j) => j.state === "running").length;
+     const paused = data.jobs.filter((j) => j.state === "paused").length;
+     $("counts").textContent = running + " running" + (paused ? ", " + paused + " paused" : "");
+@@ -269,6 +271,48 @@ $("all").addEventListener("change", (e) => {
+   try { localStorage.setItem("ptrack.all", showAll ? "1" : "0"); } catch (err) {}
+   refresh();
+ });
++
++// Browser notifications when a job this page saw running has ended.
++// Works only while the page is open; the setting is remembered per browser.
++const seenStates = new Map();
++let firstLoad = true;
++let notifyOn = false;
++try { notifyOn = localStorage.getItem("ptrack.notify") === "1"; } catch (e) {}
++const canNotify = "Notification" in window;
++$("notify").checked = notifyOn && canNotify && Notification.permission === "granted";
++$("notify").disabled = !canNotify;
++
++$("notify").addEventListener("change", async (e) => {
++  notifyOn = e.target.checked;
++  if (notifyOn && Notification.permission !== "granted") {
++    // Must be asked from a click; browsers block it otherwise.
++    const answer = await Notification.requestPermission();
++    if (answer !== "granted") {
++      notifyOn = false;
++      e.target.checked = false;
++      toast("Notifications are blocked for this page in your browser settings.");
++    }
++  }
++  try { localStorage.setItem("ptrack.notify", notifyOn ? "1" : "0"); } catch (err) {}
++});
++
++function notifyFinished(jobs) {
++  for (const j of jobs) {
++    const before = seenStates.get(j.id);
++    const wasActive = before === "running" || before === "paused";
++    const isActive = j.state === "running" || j.state === "paused";
++    if (!firstLoad && wasActive && !isActive && notifyOn && canNotify && Notification.permission === "granted") {
++      const body = "took " + dur(j.duration_ms)
++        + (j.exit_code != null ? " · exit " + j.exit_code : "")
++        + (j.last_line ? "\n" + j.last_line : "");
++      const n = new Notification(title(j) + ": " + j.state, { body: body, tag: "ptrack-" + j.id });
++      n.onclick = () => { window.focus(); openJob = j.id; refresh(); n.close(); };
++    }
++    seenStates.set(j.id, j.state);
++  }
++  firstLoad = false;
++}
++
+ refresh();
+ setInterval(refresh, 1500);
+ </script>
+diff --git a/tests/cli.rs b/tests/cli.rs
+index 7d8f4cb..d7b9b26 100644
+--- a/tests/cli.rs
++++ b/tests/cli.rs
+@@ -289,6 +289,10 @@ fn dashboard_requires_token_and_local_host() {
+     let (code, page) = http("GET", "/", &host, "");
+     assert_eq!(code, 200);
+     assert!(page.contains("<title>ptrack jobs</title>"));
++    assert!(
++        page.contains("id=\"notify\""),
++        "notification toggle is on the page"
++    );
+     assert_eq!(http("GET", "/api/jobs", &host, "").0, 401);
+     assert_eq!(http("GET", "/api/jobs", &host, "wrong").0, 401);
+     assert_eq!(
+-- 
+2.56.0.windows.2
+

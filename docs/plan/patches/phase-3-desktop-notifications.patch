@@ -1,0 +1,463 @@
+From c34c962b8b8f754cf84b9cb25410ba8b8b712aa1 Mon Sep 17 00:00:00 2001
+From: plan-reference <plan@example.invalid>
+Date: Tue, 27 Oct 2026 22:40:30 -0300
+Subject: [PATCH] Desktop notifications when a job ends (ptrack notify)
+
+---
+ README.md               |  16 ++++
+ src/config.rs           |  67 +++++++++++++++
+ src/main.rs             |   5 ++
+ src/notify.rs           | 178 ++++++++++++++++++++++++++++++++++++++++
+ src/platform/mod.rs     |   3 +-
+ src/platform/unix.rs    |   4 +
+ src/platform/windows.rs |  25 +++---
+ src/supervise.rs        |   1 +
+ tests/cli.rs            |  31 +++++++
+ 9 files changed, 319 insertions(+), 11 deletions(-)
+ create mode 100644 src/config.rs
+ create mode 100644 src/notify.rs
+
+diff --git a/README.md b/README.md
+index 3d30212..721a176 100644
+--- a/README.md
++++ b/README.md
+@@ -116,6 +116,21 @@ Tick **Notify when jobs end** to get a notification from your browser whenever a
+ This works only while the page is open. The first time, the browser asks for permission. The
+ **Rerun** button on a finished job starts its command again, in the same folder.
+ 
++## Notifications when a job ends
++
++```sh
++ptrack notify on        # desktop notification when a job ends (off by default)
++ptrack notify test      # check that notifications reach your screen
++ptrack notify           # show the current settings
++ptrack notify off
++```
++
++Only jobs that ran at least 30 seconds trigger a notification, so quick commands don't spam you.
++Change that with `ptrack notify min-seconds N`. Jobs you stopped yourself don't notify. ptrack uses
++what each system already has: PowerShell on Windows, where the notification says it comes from
++"Windows PowerShell"; `osascript` on macOS; and `notify-send` on Linux. If `notify-send` is
++missing on Ubuntu, install it with `sudo apt install libnotify-bin`.
++
+ ## MCP server (for agents)
+ 
+ `ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
+@@ -184,6 +199,7 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other
+ | `ptrack mcp [--allow-control]` | MCP server over stdio for AI agents. |
+ | `ptrack hook install [--project] [--all] [--no-prompts]` | Claude Code hook: long commands run through ptrack automatically. |
+ | `ptrack hook uninstall [--project]` | Removes the hook. |
++| `ptrack notify [on\|off\|min-seconds N\|test]` | Desktop notification when a job ends. |
+ 
+ Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
+ `-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--agent`, `--session`.
+diff --git a/src/config.rs b/src/config.rs
+new file mode 100644
+index 0000000..fecd3d0
+--- /dev/null
++++ b/src/config.rs
+@@ -0,0 +1,67 @@
++//! User settings, kept in `<home>/config.json`. Only `ptrack notify ...`
++//! writes this file. A missing file means "all defaults".
++
++use std::fs;
++use std::io;
++use std::path::PathBuf;
++
++use serde::{Deserialize, Serialize};
++
++use crate::job;
++
++#[derive(Serialize, Deserialize, Clone, Debug, Default)]
++#[serde(default)]
++pub struct Config {
++    pub notify: NotifyConfig,
++}
++
++#[derive(Serialize, Deserialize, Clone, Debug)]
++#[serde(default)]
++pub struct NotifyConfig {
++    /// Show a desktop notification when a job ends.
++    pub desktop: bool,
++    /// Only jobs that ran at least this many seconds trigger notifications.
++    pub min_seconds: u64,
++}
++
++impl Default for NotifyConfig {
++    fn default() -> Self {
++        NotifyConfig {
++            desktop: false,
++            min_seconds: 30,
++        }
++    }
++}
++
++pub fn path() -> PathBuf {
++    job::home().join("config.json")
++}
++
++/// Settings for the supervisor: any problem reading them means defaults, so
++/// a broken settings file can never break a job.
++pub fn load() -> Config {
++    load_checked().unwrap_or_default()
++}
++
++/// Settings for commands that change them: a broken file is reported instead
++/// of being silently replaced.
++pub fn load_checked() -> Result<Config, String> {
++    match fs::read(path()) {
++        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
++            format!(
++                "{} is not valid ({e}); fix or delete it first",
++                path().display()
++            )
++        }),
++        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Config::default()),
++        Err(e) => Err(format!("cannot read {}: {e}", path().display())),
++    }
++}
++
++pub fn save(config: &Config) -> io::Result<()> {
++    fs::create_dir_all(job::home())?;
++    let tmp = job::home().join("config.json.tmp");
++    let data = serde_json::to_vec_pretty(config).map_err(io::Error::other)?;
++    fs::write(&tmp, data)?;
++    fs::rename(&tmp, path())
++}
+diff --git a/src/main.rs b/src/main.rs
+index aa20db0..05714ea 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,9 +1,11 @@
+ //! ptrack: see and control the long-running processes your AI agents start.
+ 
+ mod commands;
++mod config;
+ mod hook;
+ mod job;
+ mod mcp;
++mod notify;
+ mod platform;
+ mod supervise;
+ mod util;
+@@ -33,6 +35,8 @@ USAGE
+   ptrack hook install [--project] [--all] [--no-prompts]
+                                                 make Claude Code run long commands through ptrack
+   ptrack hook uninstall [--project]             remove that hook again
++  ptrack notify [on|off|min-seconds N|test]     desktop notification when a job ends
++                                                (off by default; only jobs >= 30 s)
+ 
+ RUN OPTIONS
+   -l, --label TEXT    a human-readable name for the job
+@@ -202,6 +206,7 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
+             p.no_more()?;
+             Ok(mcp::serve(allow_control))
+         }
++        "notify" => notify::command(&args.into_iter().collect::<Vec<_>>()),
+         "hook" => {
+             let what = args.pop_front().unwrap_or_default();
+             let mut p = Parser::new(args);
+diff --git a/src/notify.rs b/src/notify.rs
+new file mode 100644
+index 0000000..1fb669a
+--- /dev/null
++++ b/src/notify.rs
+@@ -0,0 +1,178 @@
++//! Notifications when a job ends. The job's supervisor calls `job_finished`
++//! right after saving the final state. Everything here is best effort: a
++//! failure never changes the job's result.
++//!
++//! Desktop notifications use a tool that already exists on each system, so
++//! nothing has to be installed: PowerShell (Windows), osascript (macOS),
++//! notify-send (Linux desktops). Job text is passed through environment
++//! variables or arguments, never pasted into script source.
++
++use std::process::{Command, Stdio};
++
++use crate::config::{self, Config};
++use crate::job::{Job, State};
++use crate::util::{fmt_duration, truncate};
++
++/// Shows a Windows toast. Title and body come from environment variables, so
++/// no job text is ever interpreted as PowerShell code. The app id is the one
++/// Windows registers for PowerShell itself, which is allowed to show toasts.
++#[cfg(windows)]
++const WINDOWS_TOAST: &str = r#"
++$ErrorActionPreference = 'Stop'
++[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
++[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null
++$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
++$xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text></text><text></text></binding></visual></toast>')
++$t = $xml.GetElementsByTagName('text')
++$t.Item(0).AppendChild($xml.CreateTextNode($env:PTRACK_NOTIFY_TITLE)) | Out-Null
++$t.Item(1).AppendChild($xml.CreateTextNode($env:PTRACK_NOTIFY_BODY)) | Out-Null
++$toast = New-Object Windows.UI.Notifications.ToastNotification $xml
++[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Show($toast)
++"#;
++
++/// Called by the supervisor once the job has ended and been saved.
++pub fn job_finished(job: &Job) {
++    let cfg = config::load().notify;
++    // Whoever stopped the job already knows it ended.
++    if job.state == State::Cancelled || job.duration_ms() < cfg.min_seconds * 1000 {
++        return;
++    }
++    let (title, body) = message(job);
++    // The notifier may outlive us; it must not hold the caller's output pipe
++    // open, or an agent waiting for this command would wait for it too.
++    crate::platform::stop_sharing_std_handles();
++    if cfg.desktop {
++        if let Some(mut cmd) = desktop_command(&title, &body) {
++            // Don't wait: the notifier finishes on its own after we exit.
++            let _ = cmd.spawn();
++        }
++    }
++}
++
++/// `("Job failed: npm test", "took 3m04s · exit 1\nnpm ERR! ...")`
++pub fn message(job: &Job) -> (String, String) {
++    // Starts with "Job" so it can never be mistaken for a command-line option.
++    let title = format!("Job {}: {}", job.state.as_str(), truncate(&job.title(), 60));
++    let mut body = format!("took {}", fmt_duration(job.duration_ms()));
++    if let Some(code) = job.exit_code {
++        body.push_str(&format!(" · exit {code}"));
++    }
++    if let Some(line) = &job.last_line {
++        body.push('\n');
++        body.push_str(&truncate(line, 120));
++    }
++    (title, body)
++}
++
++/// The command that shows one desktop notification, or None where there is
++/// no known way to do it.
++fn desktop_command(title: &str, body: &str) -> Option<Command> {
++    #[cfg(windows)]
++    let mut cmd = {
++        use std::os::windows::process::CommandExt;
++        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
++        let mut c = Command::new("powershell.exe");
++        c.args(["-NoProfile", "-NonInteractive", "-Command", WINDOWS_TOAST])
++            .env("PTRACK_NOTIFY_TITLE", title)
++            .env("PTRACK_NOTIFY_BODY", body)
++            .creation_flags(CREATE_NO_WINDOW);
++        c
++    };
++    #[cfg(target_os = "macos")]
++    let mut cmd = {
++        let mut c = Command::new("osascript");
++        c.args([
++            "-e",
++            "on run argv",
++            "-e",
++            "display notification (item 2 of argv) with title (item 1 of argv)",
++            "-e",
++            "end run",
++            title,
++            body,
++        ]);
++        c
++    };
++    #[cfg(all(unix, not(target_os = "macos")))]
++    let mut cmd = {
++        let mut c = Command::new("notify-send");
++        c.args(["--app-name=ptrack", "--", title, body]);
++        c
++    };
++    cmd.stdin(Stdio::null())
++        .stdout(Stdio::null())
++        .stderr(Stdio::null());
++    Some(cmd)
++}
++
++/// `ptrack notify [on | off | min-seconds N | test]`
++pub fn command(args: &[String]) -> Result<i32, String> {
++    let mut cfg = config::load_checked()?;
++    let words: Vec<&str> = args.iter().map(String::as_str).collect();
++    match words.as_slice() {
++        [] => {
++            show(&cfg);
++            return Ok(0);
++        }
++        ["on"] => cfg.notify.desktop = true,
++        ["off"] => cfg.notify.desktop = false,
++        ["min-seconds", n] => {
++            cfg.notify.min_seconds = n
++                .parse()
++                .map_err(|_| format!("min-seconds needs a number, got '{n}'"))?;
++        }
++        ["test"] => return send_test(),
++        _ => return Err("usage: ptrack notify [on | off | min-seconds N | test]".into()),
++    }
++    config::save(&cfg).map_err(|e| format!("cannot save settings: {e}"))?;
++    show(&cfg);
++    Ok(0)
++}
++
++fn show(cfg: &Config) {
++    let n = &cfg.notify;
++    println!(
++        "desktop notifications: {}",
++        if n.desktop { "on" } else { "off" }
++    );
++    println!("only for jobs that ran at least: {}s", n.min_seconds);
++    println!("settings file: {}", config::path().display());
++}
++
++fn send_test() -> Result<i32, String> {
++    let mut cmd = desktop_command("Job passed: ptrack test", "Notifications work.")
++        .ok_or("desktop notifications are not supported on this system")?;
++    let status = cmd.status().map_err(|e| {
++        let hint = if cfg!(all(unix, not(target_os = "macos"))) {
++            " (on Ubuntu/Debian: sudo apt install libnotify-bin)"
++        } else {
++            ""
++        };
++        format!("could not run the notifier: {e}{hint}")
++    })?;
++    if !status.success() {
++        return Err(format!("the notifier failed ({status})"));
++    }
++    println!("sent a test notification; you should see it now");
++    Ok(0)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn message_has_state_title_exit_and_last_line() {
++        let mut job = Job::new("abc123".into(), vec!["make".into()], false);
++        job.label = Some("build".into());
++        job.last_line = Some("error: boom".into());
++        job.finish(State::Failed, Some(2));
++        let (title, body) = message(&job);
++        assert_eq!(title, "Job failed: build");
++        assert!(body.starts_with("took "), "{body}");
++        assert!(
++            body.contains("exit 2") && body.ends_with("error: boom"),
++            "{body}"
++        );
++    }
++}
+diff --git a/src/platform/mod.rs b/src/platform/mod.rs
+index 7d9cbd7..d4ca2d7 100644
+--- a/src/platform/mod.rs
++++ b/src/platform/mod.rs
+@@ -6,7 +6,8 @@
+ //! - `interrupt` / `kill` / `release`: used by the owning supervisor.
+ //! - `kill_external` / `suspend_external` / `resume_external`: used by other
+ //!   `ptrack` commands, which only know the job id and pid.
+-//! - `pid_alive`, `install_interrupt_handler`, `spawn_detached`, `resolve_program`.
++//! - `pid_alive`, `install_interrupt_handler`, `spawn_detached`, `resolve_program`,
++//!   `stop_sharing_std_handles`.
+ 
+ use std::sync::atomic::AtomicU32;
+ 
+diff --git a/src/platform/unix.rs b/src/platform/unix.rs
+index dcea3fb..33fbb60 100644
+--- a/src/platform/unix.rs
++++ b/src/platform/unix.rs
+@@ -120,3 +120,7 @@ pub fn shell_command(script: &str) -> Command {
+     cmd.arg("-c").arg(script);
+     cmd
+ }
++
++/// Nothing to do on Unix: children get /dev/null for stdio when asked, and
++/// Rust opens every other file descriptor as close-on-exec.
++pub fn stop_sharing_std_handles() {}
+diff --git a/src/platform/windows.rs b/src/platform/windows.rs
+index f0b5ee9..f6bc2e7 100644
+--- a/src/platform/windows.rs
++++ b/src/platform/windows.rs
+@@ -339,16 +339,7 @@ pub fn install_interrupt_handler() {
+ /// children inherit (so no console windows pop up). It tries to break away
+ /// from the caller's Job Object, so closing the agent does not kill the job.
+ pub fn spawn_detached(exe: &Path, args: &[OsString]) -> io::Result<()> {
+-    // Windows passes every inheritable handle to a child, including our own
+-    // stdout/stderr. If those are pipes (an agent capturing our output), the
+-    // caller would wait for the whole background job. This process is about
+-    // to exit, so it is safe to stop sharing them.
+-    for std_handle in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+-        // SAFETY: GetStdHandle may return null/invalid; SetHandleInformation then just fails.
+-        unsafe {
+-            SetHandleInformation(GetStdHandle(std_handle), HANDLE_FLAG_INHERIT, 0);
+-        }
+-    }
++    stop_sharing_std_handles();
+     let base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+     let start = |flags: u32| {
+         Command::new(exe)
+@@ -400,3 +391,17 @@ pub fn shell_command(script: &str) -> Command {
+     cmd.raw_arg(format!("/d /s /c \"{script}\""));
+     cmd
+ }
++
++/// Windows passes every inheritable handle to a child, including our own
++/// stdin/stdout/stderr. If those are pipes (an agent capturing our output),
++/// the caller would keep waiting until that child exits. Call this right
++/// before starting a process that may outlive this one, when this process
++/// will not start any child that needs them afterwards.
++pub fn stop_sharing_std_handles() {
++    for std_handle in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
++        // SAFETY: GetStdHandle may return null/invalid; SetHandleInformation then just fails.
++        unsafe {
++            SetHandleInformation(GetStdHandle(std_handle), HANDLE_FLAG_INHERIT, 0);
++        }
++    }
++}
+diff --git a/src/supervise.rs b/src/supervise.rs
+index ef13c3f..1f2d902 100644
+--- a/src/supervise.rs
++++ b/src/supervise.rs
+@@ -309,6 +309,7 @@ fn supervise(opts: RunOpts) -> i32 {
+     if let Err(e) = job.save() {
+         eprintln!("ptrack: cannot write final job state: {e}");
+     }
++    crate::notify::job_finished(&job);
+ 
+     if speak {
+         eprintln!("{}", summary(&job));
+diff --git a/tests/cli.rs b/tests/cli.rs
+index d7b9b26..96f38d5 100644
+--- a/tests/cli.rs
++++ b/tests/cli.rs
+@@ -445,3 +445,34 @@ fn rerun_refuses_a_job_that_is_still_running() {
+     assert!(String::from_utf8_lossy(&out.stderr).contains("still running"));
+     h.ptrack(&["stop", &id, "--force"]);
+ }
++
++#[test]
++fn notify_settings_are_saved_and_validated() {
++    let h = Home::new("notify");
++    let show = h.ptrack(&["notify"]);
++    assert!(String::from_utf8_lossy(&show.stdout).contains("desktop notifications: off"));
++
++    assert!(h.ptrack(&["notify", "on"]).status.success());
++    assert!(h.ptrack(&["notify", "min-seconds", "0"]).status.success());
++    let saved: serde_json::Value =
++        serde_json::from_slice(&std::fs::read(h.0.join("config.json")).unwrap()).unwrap();
++    assert_eq!(saved["notify"]["desktop"], true);
++    assert_eq!(saved["notify"]["min_seconds"], 0);
++
++    assert_eq!(
++        h.ptrack(&["notify", "min-seconds", "soon"]).status.code(),
++        Some(2)
++    );
++    assert_eq!(h.ptrack(&["notify", "sideways"]).status.code(), Some(2));
++    assert!(h.ptrack(&["notify", "off"]).status.success());
++
++    // A broken settings file is reported, not overwritten, and never breaks jobs.
++    std::fs::write(h.0.join("config.json"), "{ broken").unwrap();
++    assert_eq!(h.ptrack(&["notify", "on"]).status.code(), Some(2));
++    assert_eq!(
++        std::fs::read_to_string(h.0.join("config.json")).unwrap(),
++        "{ broken"
++    );
++    let out = h.ptrack(&["run", "-q", "-s", "--", "echo still works"]);
++    assert!(out.status.success());
++}
+-- 
+2.56.0.windows.2
+

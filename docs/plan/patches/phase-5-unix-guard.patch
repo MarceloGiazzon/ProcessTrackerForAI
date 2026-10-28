@@ -1,0 +1,417 @@
+From a021e94398d44ad20c8e6ae497eb84fb923092b2 Mon Sep 17 00:00:00 2001
+From: plan-reference <plan@example.invalid>
+Date: Tue, 27 Oct 2026 22:47:35 -0300
+Subject: [PATCH] Unix: guard process stops the job if its supervisor dies
+
+---
+ Cargo.lock              |   2 +-
+ Cargo.toml              |   4 +-
+ README.md               |  15 +++---
+ src/guard.rs            | 109 ++++++++++++++++++++++++++++++++++++++++
+ src/main.rs             |   8 +++
+ src/platform/unix.rs    |  27 +++++++++-
+ src/platform/windows.rs |  10 +++-
+ src/supervise.rs        |  15 ++++--
+ tests/cli.rs            |  92 +++++++++++++++++++++++++++++++++
+ 9 files changed, 265 insertions(+), 17 deletions(-)
+ create mode 100644 src/guard.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index d23829b..c5d1aae 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -59,7 +59,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "process-tracker-for-ai"
+-version = "0.3.0"
++version = "0.4.0"
+ dependencies = [
+  "libc",
+  "serde",
+diff --git a/Cargo.toml b/Cargo.toml
+index 139bf94..5830b09 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,8 +1,8 @@
+ [package]
+ name = "process-tracker-for-ai"
+-version = "0.3.0"
++version = "0.4.0"
+ edition = "2024"
+-rust-version = "1.85"
++rust-version = "1.87"
+ description = "See and control the long-running processes your AI coding agents start: what is running, who started it, since when, how it ended."
+ license = "MIT"
+ readme = "README.md"
+diff --git a/README.md b/README.md
+index aa964ae..8d57d06 100644
+--- a/README.md
++++ b/README.md
+@@ -253,7 +253,7 @@ no longer exists, the job is shown as **lost**.
+ | Stop, polite first | Ctrl+Break | SIGTERM |
+ | Stop, forced | Terminate the Job Object | SIGKILL to the group |
+ | Pause / resume | Suspend / resume every process in the job | SIGSTOP / SIGCONT to the group |
+-| If the supervisor itself is killed | The tree is killed with it, so nothing is left running unrecorded | The tree may keep running (see limits below) |
++| If the supervisor itself is killed | The Job Object takes the tree down with it | A small guard process (`ptrack __guard`) notices and stops the group: SIGTERM, then SIGKILL after 5 s |
+ 
+ ## Honest limits
+ 
+@@ -262,8 +262,10 @@ no longer exists, the job is shown as **lost**.
+   rerun for those.
+ - **Polite stop on Windows:** many console programs exit on Ctrl+Break, but some don't. Java prints
+   a thread dump; `ping` prints statistics. ptrack then force-stops them when the grace time is up.
+-- **On Linux/macOS, a killed supervisor can leave the job running.** It is then shown as `lost`, and
+-  `ptrack stop` tells you the process group to kill by hand. Windows doesn't have this problem.
++- **Programs that deliberately detach themselves can escape.** On Linux/macOS, a process that
++  starts its own session (`setsid`, like a system daemon) leaves the job's process group, so
++  stop and pause no longer reach it. The same is true on Windows for a process that breaks away
++  from its Job Object. Normal dev tools don't do this.
+ - **Background helpers are left alone after a normal exit.** For example, a Gradle daemon started by
+   a build keeps running, just as it would without ptrack. `stop` does kill them.
+ - **No input.** Jobs get no keyboard input, so commands that ask questions get an end-of-input
+@@ -277,9 +279,10 @@ no longer exists, the job is shown as **lost**.
+ ## Roadmap
+ 
+ - ✅ v0.2: local dashboard (`ptrack ui`) and MCP server (`ptrack mcp`).
+-- ✅ v0.3 (in progress): Claude Code hook with prompt attribution.
+-- Next: rerun, desktop notifications when a job ends, no orphaned processes on Linux/macOS,
+-  recipes for more agents.
++- ✅ v0.3: Claude Code hook with prompt attribution.
++- ✅ v0.4: rerun, notifications when a job ends (browser, desktop, webhook), no orphaned processes
++  on Linux/macOS.
++- Next: recipes for more agents (Codex, Cursor, Gemini CLI, Aider).
+ - v1.0: stable record format, signed binaries, winget / Scoop / Homebrew packages.
+ 
+ ## Development
+diff --git a/src/guard.rs b/src/guard.rs
+new file mode 100644
+index 0000000..7da1df9
+--- /dev/null
++++ b/src/guard.rs
+@@ -0,0 +1,109 @@
++//! `ptrack __guard -- <program> [args...]` (Unix only, internal).
++//!
++//! Sits between a job's supervisor and its command, as the leader of the
++//! job's process group. Its stdin is a pipe whose other end only the
++//! supervisor holds. If the supervisor dies, even by SIGKILL, the pipe
++//! closes and the guard stops the whole group, so nothing keeps running
++//! unrecorded. Windows gets the same guarantee from its Job Object.
++//!
++//! While the supervisor lives, the guard is invisible: it runs the command,
++//! waits for it, and exits with the command's exit code.
++
++use std::io::Read;
++use std::os::unix::process::ExitStatusExt;
++use std::process::{Command, ExitStatus, Stdio};
++use std::sync::Arc;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::thread;
++use std::time::{Duration, Instant};
++
++/// How long the command gets to exit after SIGTERM before SIGKILL.
++const GRACE: Duration = Duration::from_secs(5);
++
++pub fn run(command: &[String]) -> i32 {
++    let Some((program, args)) = command.split_first() else {
++        eprintln!("[ptrack] guard: nothing to run");
++        return 2;
++    };
++    let mut child = match Command::new(program)
++        .args(args)
++        .stdin(Stdio::null())
++        .spawn()
++    {
++        Ok(c) => c,
++        Err(e) => {
++            eprintln!("[ptrack] could not start '{program}': {e}");
++            return 127;
++        }
++    };
++    // Stop requests (`ptrack stop`, Ctrl+C) are sent to the whole group and
++    // are meant for the command; the guard stays to report how it ended.
++    // Set only after the spawn: ignored signals are inherited by children.
++    // SAFETY: setting a signal disposition to SIG_IGN is always safe.
++    unsafe {
++        libc::signal(libc::SIGTERM, libc::SIG_IGN);
++        libc::signal(libc::SIGINT, libc::SIG_IGN);
++        libc::signal(libc::SIGHUP, libc::SIG_IGN);
++    }
++
++    let supervisor_gone = Arc::new(AtomicBool::new(false));
++    let flag = supervisor_gone.clone();
++    thread::spawn(move || {
++        // The supervisor never writes; end-of-file means it is gone.
++        let mut stdin = std::io::stdin();
++        let mut buf = [0u8; 64];
++        loop {
++            match stdin.read(&mut buf) {
++                Ok(0) => break,
++                Ok(_) => {}
++                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
++                Err(_) => break,
++            }
++        }
++        flag.store(true, Ordering::SeqCst);
++    });
++
++    let mut stopping_since: Option<Instant> = None;
++    loop {
++        match child.try_wait() {
++            Ok(Some(status)) => {
++                if supervisor_gone.load(Ordering::SeqCst) {
++                    // Nobody will record this job any more: take down
++                    // anything the command left behind (and the guard).
++                    signal_group(libc::SIGKILL);
++                }
++                return exit_code(status);
++            }
++            Ok(None) => {}
++            Err(_) => return 1,
++        }
++        if supervisor_gone.load(Ordering::SeqCst) {
++            match stopping_since {
++                None => {
++                    signal_group(libc::SIGTERM);
++                    // A paused job must be woken up to receive SIGTERM.
++                    signal_group(libc::SIGCONT);
++                    stopping_since = Some(Instant::now());
++                }
++                // Also ends the guard itself.
++                Some(t) if t.elapsed() >= GRACE => signal_group(libc::SIGKILL),
++                Some(_) => {}
++            }
++        }
++        thread::sleep(Duration::from_millis(100));
++    }
++}
++
++fn signal_group(sig: i32) {
++    // SAFETY: plain syscalls; the guard leads its own process group.
++    unsafe {
++        libc::killpg(libc::getpgrp(), sig);
++    }
++}
++
++/// Same convention as shells: a command killed by signal N exits with 128+N.
++fn exit_code(status: ExitStatus) -> i32 {
++    status
++        .code()
++        .unwrap_or_else(|| 128 + status.signal().unwrap_or(0))
++}
+diff --git a/src/main.rs b/src/main.rs
+index 00e205c..a5a4951 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -2,6 +2,8 @@
+ 
+ mod commands;
+ mod config;
++#[cfg(unix)]
++mod guard;
+ mod hook;
+ mod job;
+ mod mcp;
+@@ -209,6 +211,12 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
+             Ok(mcp::serve(allow_control))
+         }
+         "notify" => notify::command(&args.into_iter().collect::<Vec<_>>()),
++        // Internal, started by the supervisor on Unix: see guard.rs.
++        #[cfg(unix)]
++        "__guard" => {
++            let command: Vec<String> = args.into_iter().skip_while(|a| a != "--").skip(1).collect();
++            Ok(guard::run(&command))
++        }
+         "hook" => {
+             let what = args.pop_front().unwrap_or_default();
+             let mut p = Parser::new(args);
+diff --git a/src/platform/unix.rs b/src/platform/unix.rs
+index 33fbb60..a948fd2 100644
+--- a/src/platform/unix.rs
++++ b/src/platform/unix.rs
+@@ -12,8 +12,31 @@ pub struct Tree {
+     pgid: i32,
+ }
+ 
+-pub fn prepare(cmd: &mut Command) {
+-    cmd.process_group(0);
++/// The supervisor keeps this open for as long as it lives; see `guard.rs`.
++pub type Lifeline = io::PipeWriter;
++
++/// Wraps the command in `ptrack __guard`, which leads a new process group
++/// and stops the whole group if the supervisor ever dies without cleaning
++/// up. The guard's stdin is the lifeline pipe; the command gets /dev/null.
++pub fn prepare(cmd: Command) -> io::Result<(Command, Lifeline)> {
++    let (reader, writer) = io::pipe()?;
++    let mut guard = Command::new(std::env::current_exe()?);
++    guard
++        .arg("__guard")
++        .arg("--")
++        .arg(cmd.get_program())
++        .args(cmd.get_args());
++    if let Some(dir) = cmd.get_current_dir() {
++        guard.current_dir(dir);
++    }
++    for (key, value) in cmd.get_envs() {
++        match value {
++            Some(v) => guard.env(key, v),
++            None => guard.env_remove(key),
++        };
++    }
++    guard.stdin(reader).process_group(0);
++    Ok((guard, writer))
+ }
+ 
+ pub fn attach(child: &Child, _id: &str) -> io::Result<Tree> {
+diff --git a/src/platform/windows.rs b/src/platform/windows.rs
+index f6bc2e7..e6aef66 100644
+--- a/src/platform/windows.rs
++++ b/src/platform/windows.rs
+@@ -58,10 +58,16 @@ pub struct Tree {
+ // must cross into it from `attach`.
+ unsafe impl Send for Tree {}
+ 
++/// Nothing to keep alive on Windows: the Job Object (see `attach`) already
++/// takes the tree down if the supervisor dies.
++pub type Lifeline = ();
++
+ /// Start suspended so the child can join the job before it runs any code or
+ /// starts children of its own; a new process group lets us send Ctrl+Break.
+-pub fn prepare(cmd: &mut Command) {
+-    cmd.creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP);
++pub fn prepare(mut cmd: Command) -> io::Result<(Command, Lifeline)> {
++    cmd.creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP)
++        .stdin(Stdio::null());
++    Ok((cmd, ()))
+ }
+ 
+ pub fn attach(child: &Child, id: &str) -> io::Result<Tree> {
+diff --git a/src/supervise.rs b/src/supervise.rs
+index 1f2d902..b0c5a10 100644
+--- a/src/supervise.rs
++++ b/src/supervise.rs
+@@ -189,10 +189,17 @@ fn supervise(opts: RunOpts) -> i32 {
+     if let Some(dir) = &opts.cwd {
+         cmd.current_dir(dir);
+     }
+-    cmd.stdin(Stdio::null())
+-        .stdout(Stdio::piped())
+-        .stderr(Stdio::piped());
+-    platform::prepare(&mut cmd);
++    // `_lifeline` must stay alive until this function returns: on Unix,
++    // dropping it tells the guard process that the supervisor is gone.
++    // (Naming it `_` instead would drop it immediately.)
++    let (mut cmd, _lifeline) = match platform::prepare(cmd) {
++        Ok(prepared) => prepared,
++        Err(e) => {
++            eprintln!("ptrack: cannot prepare the command: {e}");
++            return 1;
++        }
++    };
++    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+ 
+     let mut child = match cmd.spawn() {
+         Ok(c) => c,
+diff --git a/tests/cli.rs b/tests/cli.rs
+index 6e0cd44..bf66970 100644
+--- a/tests/cli.rs
++++ b/tests/cli.rs
+@@ -593,3 +593,95 @@ fn a_hanging_webhook_does_not_delay_the_command() {
+         started.elapsed()
+     );
+ }
++
++/// True while any process of the group exists (signal 0 only checks).
++#[cfg(unix)]
++fn group_alive(pgid: i64) -> bool {
++    // SAFETY: signal 0 delivers nothing.
++    unsafe { libc::kill(-(pgid as i32), 0) == 0 }
++}
++
++#[cfg(unix)]
++fn pid_alive(pid: i64) -> bool {
++    // SAFETY: signal 0 delivers nothing.
++    unsafe { libc::kill(pid as i32, 0) == 0 }
++}
++
++#[cfg(unix)]
++fn eventually(mut condition: impl FnMut() -> bool, secs: u64) -> bool {
++    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
++    while std::time::Instant::now() < deadline {
++        if condition() {
++            return true;
++        }
++        sleep(Duration::from_millis(100));
++    }
++    condition()
++}
++
++/// Kills a background job's supervisor with SIGKILL (no chance to clean
++/// up) and returns the job's process group id.
++#[cfg(unix)]
++fn kill_supervisor(h: &Home, id: &str) -> i64 {
++    let job = h.json(&["status", id, "--json"]);
++    let supervisor = job["supervisor_pid"].as_i64().unwrap();
++    let pgid = job["pid"].as_i64().unwrap();
++    assert!(group_alive(pgid), "job is running before the test");
++    // SAFETY: plain syscall on a pid we just read from our own job file.
++    assert_eq!(unsafe { libc::kill(supervisor as i32, libc::SIGKILL) }, 0);
++    pgid
++}
++
++#[cfg(unix)]
++#[test]
++fn killing_the_supervisor_stops_the_job_on_unix() {
++    let h = Home::new("guard");
++    let id = h.detach(LONG);
++    sleep(Duration::from_millis(800));
++    let pgid = kill_supervisor(&h, &id);
++    assert!(
++        eventually(|| !group_alive(pgid), 10),
++        "the job's processes outlived their supervisor"
++    );
++}
++
++#[cfg(unix)]
++#[test]
++fn a_paused_job_is_cleaned_up_too_when_its_supervisor_dies() {
++    let h = Home::new("guard-paused");
++    let id = h.detach(LONG);
++    sleep(Duration::from_millis(800));
++    assert!(h.ptrack(&["pause", &id]).status.success());
++    let pgid = kill_supervisor(&h, &id);
++    assert!(
++        eventually(|| !group_alive(pgid), 10),
++        "a paused job outlived its supervisor"
++    );
++}
++
++#[cfg(unix)]
++#[test]
++fn background_helpers_survive_a_normal_exit_on_unix() {
++    let h = Home::new("guard-helper");
++    let out = h.ptrack(&[
++        "run",
++        "-q",
++        "-s",
++        "--",
++        "sleep 30 >/dev/null 2>&1 & echo $!",
++    ]);
++    assert!(out.status.success());
++    let helper: i64 = h.json(&["status", "--json"])["last_line"]
++        .as_str()
++        .unwrap()
++        .parse()
++        .unwrap();
++    sleep(Duration::from_millis(500));
++    let alive = pid_alive(helper);
++    // SAFETY: stops the helper this test started.
++    unsafe { libc::kill(helper as i32, libc::SIGKILL) };
++    assert!(
++        alive,
++        "a normal exit must not kill helpers the command left running"
++    );
++}
+-- 
+2.56.0.windows.2
+
