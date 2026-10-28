@@ -23,6 +23,7 @@ pub struct RunOpts {
     pub label: Option<String>,
     pub agent: Option<String>,
     pub session: Option<String>,
+    pub prompt_id: Option<String>,
     pub shell: bool,
     pub detach: bool,
     pub quiet: bool,
@@ -59,6 +60,7 @@ fn detach(opts: RunOpts) -> i32 {
         ("--label", &opts.label),
         ("--agent", &opts.agent),
         ("--session", &opts.session),
+        ("--prompt-id", &opts.prompt_id),
     ] {
         if let Some(v) = value {
             args.push(flag.into());
@@ -129,6 +131,8 @@ fn supervise(opts: RunOpts) -> i32 {
     let mut job = Job::new(id.clone(), opts.command.clone(), opts.shell);
     job.label = opts.label.clone();
     (job.agent, job.session) = detect_agent(&opts);
+    job.prompt_id = opts.prompt_id.clone();
+    job.prompt = opts.prompt_id.as_deref().and_then(job::prompt_preview);
     let echo = !opts.background && !opts.quiet;
     let speak = !opts.background;
 

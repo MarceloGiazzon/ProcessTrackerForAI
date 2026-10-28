@@ -60,6 +60,12 @@ pub struct Job {
     pub cwd: String,
     pub agent: Option<String>,
     pub session: Option<String>,
+    /// The agent's id for the user prompt that led to this job.
+    #[serde(default)]
+    pub prompt_id: Option<String>,
+    /// Start of that prompt's text, when the agent integration recorded it.
+    #[serde(default)]
+    pub prompt: Option<String>,
     pub state: State,
     pub exit_code: Option<i32>,
     pub started_at: String,
@@ -115,6 +121,21 @@ fn job_path(id: &str) -> PathBuf {
     jobs_dir().join(format!("{id}.json"))
 }
 
+/// Where agent integrations keep a short preview of each prompt, by prompt id.
+pub fn prompts_dir() -> PathBuf {
+    home().join("prompts")
+}
+
+pub fn prompt_preview(prompt_id: &str) -> Option<String> {
+    let safe = prompt_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if !safe {
+        return None;
+    }
+    fs::read_to_string(prompts_dir().join(format!("{prompt_id}.txt"))).ok()
+}
+
 pub fn stop_marker(id: &str) -> PathBuf {
     jobs_dir().join(format!("{id}.stop"))
 }
@@ -148,6 +169,8 @@ impl Job {
             cwd,
             agent: None,
             session: None,
+            prompt_id: None,
+            prompt: None,
             state: State::Running,
             exit_code: None,
             started_at: iso_utc(now),

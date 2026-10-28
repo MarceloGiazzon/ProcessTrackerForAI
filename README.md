@@ -130,6 +130,32 @@ Other MCP clients (Cursor, Gemini CLI, …) use the usual JSON config:
 { "mcpServers": { "ptrack": { "command": "ptrack", "args": ["mcp"] } } }
 ```
 
+## Automatic tracking in Claude Code (hook)
+
+With the hook, you don't have to rely on the agent remembering to use ptrack:
+
+```sh
+ptrack hook install            # for all your projects (~/.claude/settings.json)
+ptrack hook install --project  # only this project (.claude/settings.local.json)
+```
+
+Restart Claude Code afterwards. From then on:
+
+- **Long-running commands** (builds, tests, installs, servers, Docker, and similar) and **every
+  background command** run through ptrack automatically. Claude sees the same output and exit code
+  as before, plus one `[ptrack]` line at the start and one at the end.
+- Each job is labelled with the description Claude gave the command, and linked to the **session
+  and the prompt** that caused it. A 200-character preview of each prompt is kept locally. Use
+  `--no-prompts` if you don't want that.
+- `--all` wraps every command, not just long-running ones.
+- Undo with `ptrack hook uninstall` (add `--project` if you installed it that way). Your other
+  settings are kept, and a backup is written next to the settings file.
+
+**Permission rules:** the hook never approves anything. Claude Code checks its permission rules
+against the *rewritten* command, so an allow rule such as `Bash(npm test:*)` no longer matches a
+wrapped `npm test`. In the default permission mode, Claude Code will ask you before running it.
+Auto mode and bypass mode are not affected.
+
 ## Who started each job
 
 ptrack works out which agent and session started a job by itself when the agent provides that
@@ -150,6 +176,8 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other 
 | `ptrack prune [--days N] [--all]` | Deletes finished jobs and their logs (default: older than 7 days). |
 | `ptrack ui [--port N] [--no-open]` | Live dashboard in your browser (this computer only). |
 | `ptrack mcp [--allow-control]` | MCP server over stdio for AI agents. |
+| `ptrack hook install [--project] [--all] [--no-prompts]` | Claude Code hook: long commands run through ptrack automatically. |
+| `ptrack hook uninstall [--project]` | Removes the hook. |
 
 Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
 `-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--agent`, `--session`.
@@ -210,8 +238,9 @@ no longer exists, the job is shown as **lost**.
 ## Roadmap
 
 - ✅ v0.2: local dashboard (`ptrack ui`) and MCP server (`ptrack mcp`).
-- v0.3: a ready-made Claude Code hook, rerun, desktop notifications when a job ends, recipes for
-  more agents.
+- ✅ v0.3 (in progress): Claude Code hook with prompt attribution.
+- Next: rerun, desktop notifications when a job ends, no orphaned processes on Linux/macOS,
+  recipes for more agents.
 - v1.0: stable record format, signed binaries, winget / Scoop / Homebrew packages.
 
 ## Development

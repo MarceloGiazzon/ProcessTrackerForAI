@@ -304,3 +304,83 @@ fn dashboard_requires_token_and_local_host() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+#[test]
+fn claude_code_hook_wraps_long_commands_and_links_prompts() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let h = Home::new("hook");
+    let hook = |event: serde_json::Value| -> String {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ptrack"))
+            .args(["hook", "claude-code"])
+            .env("PTRACK_HOME", &h.0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        write!(child.stdin.take().unwrap(), "{event}").unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "the hook must never fail");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let prompt_id = "550e8400-e29b-41d4-a716-446655440000";
+
+    let silent = hook(serde_json::json!({
+        "hook_event_name": "UserPromptSubmit", "prompt_id": prompt_id, "session_id": "s1",
+        "prompt": "Run the tests\nplease"
+    }));
+    assert_eq!(
+        silent, "",
+        "UserPromptSubmit output would be added to the conversation"
+    );
+
+    let untouched = hook(serde_json::json!({
+        "hook_event_name": "PreToolUse", "tool_name": "Bash",
+        "tool_input": { "command": "git status", "description": "status" }
+    }));
+    assert_eq!(untouched, "", "short commands are left alone");
+
+    let garbage = hook(serde_json::json!("not an event"));
+    assert_eq!(garbage, "");
+
+    let out = hook(serde_json::json!({
+        "hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "s1", "prompt_id": prompt_id,
+        "tool_input": { "command": "make test; echo done", "description": "Run tests", "timeout": 5000 }
+    }));
+    let reply: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let updated = &reply["hookSpecificOutput"]["updatedInput"];
+    assert_eq!(reply["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    assert!(
+        reply["hookSpecificOutput"]
+            .get("permissionDecision")
+            .is_none(),
+        "never auto-approve"
+    );
+    assert_eq!(updated["timeout"], 5000, "other tool fields are kept");
+    let command = updated["command"].as_str().unwrap();
+    assert!(
+        command.contains(" run -l 'Run tests' --session 's1' --prompt-id "),
+        "{command}"
+    );
+
+    // On Unix, run the rewritten command the way the agent's shell would.
+    #[cfg(unix)]
+    {
+        let rewritten = command.replace("make test", "echo testing; exit 5");
+        let status = Command::new("sh")
+            .args(["-c", &rewritten])
+            .env("PTRACK_HOME", &h.0)
+            .status()
+            .unwrap();
+        assert_eq!(
+            status.code(),
+            Some(5),
+            "the agent sees the command's own exit code"
+        );
+        let job = h.json(&["status", "--json"]);
+        assert_eq!(job["label"], "Run tests");
+        assert_eq!(job["prompt"], "Run the tests please");
+        assert_eq!(job["state"], "failed");
+    }
+}

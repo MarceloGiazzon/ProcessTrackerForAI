@@ -137,6 +137,9 @@ pub fn status(id: Option<&str>, json: bool) -> CmdResult {
     if let Some(s) = &j.session {
         row("session", s);
     }
+    if let Some(p) = &j.prompt {
+        row("prompt", p);
+    }
     row(
         "started",
         &format!(
@@ -372,6 +375,20 @@ pub fn prune(older_than_days: u64) -> CmdResult {
         }
         if j.ended_ms.unwrap_or(j.heartbeat_ms) <= cutoff && job::remove(&j).is_ok() {
             removed += 1;
+        }
+    }
+    // Prompt previews are only needed while jobs refer to them.
+    if let Ok(entries) = std::fs::read_dir(job::prompts_dir()) {
+        let cutoff = std::time::SystemTime::now()
+            - Duration::from_millis(older_than_days * 24 * 60 * 60 * 1000);
+        for e in entries.flatten() {
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t <= cutoff);
+            if old {
+                let _ = std::fs::remove_file(e.path());
+            }
         }
     }
     println!("removed {removed} finished job(s)");

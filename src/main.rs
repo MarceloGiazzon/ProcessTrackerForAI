@@ -1,6 +1,7 @@
 //! ptrack: see and control the long-running processes your AI agents start.
 
 mod commands;
+mod hook;
 mod job;
 mod mcp;
 mod platform;
@@ -28,6 +29,9 @@ USAGE
   ptrack ui [--port N] [--no-open]              live dashboard in your browser (this computer only)
   ptrack mcp [--allow-control]                  MCP server for AI agents (stdio); read-only unless
                                                 --allow-control (adds stop / pause / resume)
+  ptrack hook install [--project] [--all] [--no-prompts]
+                                                make Claude Code run long commands through ptrack
+  ptrack hook uninstall [--project]             remove that hook again
 
 RUN OPTIONS
   -l, --label TEXT    a human-readable name for the job
@@ -183,6 +187,31 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
             p.no_more()?;
             Ok(mcp::serve(allow_control))
         }
+        "hook" => {
+            let what = args.pop_front().unwrap_or_default();
+            let mut p = Parser::new(args);
+            let (mut project, mut all, mut prompts) = (false, false, true);
+            while let Some(a) = p.next_flag()? {
+                match a.as_str() {
+                    "--project" => project = true,
+                    "--all" => all = true,
+                    "--no-prompts" => prompts = false,
+                    _ => return Err(unknown(&a)),
+                }
+            }
+            p.no_more()?;
+            match what.as_str() {
+                // Called by Claude Code itself; must never fail loudly.
+                "claude-code" => Ok(hook::run_claude_code(all)),
+                "install" => hook::install(hook::InstallOpts {
+                    project,
+                    wrap_all: all,
+                    record_prompts: prompts,
+                }),
+                "uninstall" => hook::uninstall(project),
+                _ => Err("usage: ptrack hook install|uninstall [--project]".into()),
+            }
+        }
         "help" | "--help" | "-h" => {
             print!("{HELP}");
             Ok(0)
@@ -207,6 +236,7 @@ fn parse_run(args: VecDeque<String>) -> Result<RunOpts, String> {
             "-s" | "--shell" => opts.shell = true,
             "--agent" => opts.agent = Some(p.value(&a)?),
             "--session" => opts.session = Some(p.value(&a)?),
+            "--prompt-id" => opts.prompt_id = Some(p.value(&a)?),
             "--background" => opts.background = true,
             "--job-id" => opts.job_id = Some(p.value(&a)?),
             _ => return Err(format!("{} (put the command after --)", unknown(&a))),
