@@ -2,9 +2,11 @@
 
 mod commands;
 mod job;
+mod mcp;
 mod platform;
 mod supervise;
 mod util;
+mod web;
 
 use std::collections::VecDeque;
 use std::process::ExitCode;
@@ -23,6 +25,9 @@ USAGE
   ptrack stop ID [--grace SECS] [--force]       stop the job and everything it started
   ptrack pause ID | ptrack resume ID            freeze / unfreeze the whole job
   ptrack prune [--days N] [--all]               delete finished jobs (default: older than 7 days)
+  ptrack ui [--port N] [--no-open]              live dashboard in your browser (this computer only)
+  ptrack mcp [--allow-control]                  MCP server for AI agents (stdio); read-only unless
+                                                --allow-control (adds stop / pause / resume)
 
 RUN OPTIONS
   -l, --label TEXT    a human-readable name for the job
@@ -152,6 +157,31 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
             }
             p.no_more()?;
             commands::prune(if all { 0 } else { days })
+        }
+        "ui" | "dashboard" => {
+            let mut p = Parser::new(args);
+            let (mut port, mut open) = (None, true);
+            while let Some(a) = p.next_flag()? {
+                match a.as_str() {
+                    "--port" | "-p" => port = Some(p.number(&a)?),
+                    "--no-open" => open = false,
+                    _ => return Err(unknown(&a)),
+                }
+            }
+            p.no_more()?;
+            Ok(web::serve(port, open))
+        }
+        "mcp" => {
+            let mut p = Parser::new(args);
+            let mut allow_control = false;
+            while let Some(a) = p.next_flag()? {
+                match a.as_str() {
+                    "--allow-control" => allow_control = true,
+                    _ => return Err(unknown(&a)),
+                }
+            }
+            p.no_more()?;
+            Ok(mcp::serve(allow_control))
         }
         "help" | "--help" | "-h" => {
             print!("{HELP}");

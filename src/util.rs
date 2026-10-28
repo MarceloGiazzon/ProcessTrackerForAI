@@ -72,6 +72,18 @@ pub fn new_id() -> String {
         .collect()
 }
 
+/// 128 random bits as hex, for the web page's access token. std's hash keys
+/// are seeded from the operating system's random source.
+pub fn random_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let part = || {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u64(now_ms());
+        h.finish()
+    };
+    format!("{:016x}{:016x}", part(), part())
+}
+
 /// Turns one raw output line into something worth showing as "last line":
 /// keeps the text after the last carriage return (progress bars), strips
 /// terminal colour codes, trims, and caps the length.

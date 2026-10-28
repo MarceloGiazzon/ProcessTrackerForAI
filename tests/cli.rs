@@ -160,3 +160,147 @@ fn prune_removes_finished_jobs_only() {
     assert_eq!(jobs.as_array().unwrap().len(), 1);
     h.ptrack(&["stop", &id, "--force"]);
 }
+
+#[test]
+fn mcp_server_lists_jobs_and_guards_control_tools() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let h = Home::new("mcp");
+    h.ptrack(&[
+        "run",
+        "-q",
+        "-l",
+        "unit tests",
+        "-s",
+        "--",
+        "echo 212 passed",
+    ]);
+
+    let session = |allow_control: bool, requests: &[serde_json::Value]| -> Vec<serde_json::Value> {
+        let mut args = vec!["mcp"];
+        if allow_control {
+            args.push("--allow-control");
+        }
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ptrack"))
+            .args(&args)
+            .env("PTRACK_HOME", &h.0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        for r in requests {
+            writeln!(stdin, "{r}").unwrap();
+        }
+        drop(stdin);
+        let out = child.wait_with_output().unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    };
+    let call = |id: u32, name: &str, args: serde_json::Value| serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":args}});
+
+    let replies = session(
+        false,
+        &[
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}),
+            serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+            call(3, "jobs_list", serde_json::json!({})),
+            call(4, "job_stop", serde_json::json!({"id":"last"})),
+        ],
+    );
+    assert_eq!(replies.len(), 4, "notifications get no reply: {replies:?}");
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "ptrack");
+    let tools: Vec<&str> = replies[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(tools, ["jobs_list", "job_status", "job_tail", "job_wait"]);
+    let listing = replies[2]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        listing.contains("passed")
+            && listing.contains("unit tests")
+            && listing.contains("212 passed"),
+        "{listing}"
+    );
+    assert_eq!(replies[3]["result"]["isError"], true);
+
+    let replies = session(
+        true,
+        &[serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})],
+    );
+    assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 7);
+}
+
+#[test]
+fn dashboard_requires_token_and_local_host() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpStream;
+    use std::process::Stdio;
+
+    let h = Home::new("ui");
+    h.ptrack(&["run", "-q", "-s", "--", "echo hi"]);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ptrack"))
+        .args(["ui", "--port", "0", "--no-open"])
+        .env("PTRACK_HOME", &h.0)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut first)
+        .unwrap();
+    // "ptrack dashboard: http://127.0.0.1:<port>/#t=<token>"
+    let url = first.trim().rsplit(' ').next().unwrap().to_string();
+    let port: u16 = url
+        .split(':')
+        .nth(2)
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let token = url.split("#t=").nth(1).unwrap().to_string();
+
+    let http = |method: &str, path: &str, host: &str, token: &str| -> (u16, String) {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            s,
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nX-Ptrack-Token: {token}\r\n\r\n"
+        )
+        .unwrap();
+        let mut resp = String::new();
+        s.read_to_string(&mut resp).unwrap();
+        let code = resp[9..12].parse().unwrap();
+        let body = resp
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        (code, body)
+    };
+    let host = format!("127.0.0.1:{port}");
+
+    let (code, page) = http("GET", "/", &host, "");
+    assert_eq!(code, 200);
+    assert!(page.contains("<title>ptrack jobs</title>"));
+    assert_eq!(http("GET", "/api/jobs", &host, "").0, 401);
+    assert_eq!(http("GET", "/api/jobs", &host, "wrong").0, 401);
+    assert_eq!(
+        http("GET", "/api/jobs", &format!("evil.example:{port}"), &token).0,
+        403
+    );
+    let (code, body) = http("GET", "/api/jobs", &host, &token);
+    assert_eq!(code, 200);
+    let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(data["jobs"][0]["state"], "passed");
+    assert_eq!(http("POST", "/api/jobs/last/resume", &host, &token).0, 409);
+
+    let _ = child.kill();
+    let _ = child.wait();
+}

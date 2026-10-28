@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ptrack jobs</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6ec;
+    --running: #1d63d8; --paused: #b26a00; --passed: #1a7f45; --failed: #c4302b;
+    --cancelled: #667085; --lost: #8a3ffc; --code-bg: #0f1420; --code-text: #d7dce6;
+    --btn: #eef1f5; --btn-hover: #e2e6ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1218; --panel: #171b23; --text: #e6e9ef; --muted: #98a1b3; --line: #262c38;
+      --running: #6aa4ff; --paused: #f0b04a; --passed: #4cc287; --failed: #ff6b63;
+      --cancelled: #98a1b3; --lost: #b48cff; --code-bg: #0a0d13; --code-text: #d7dce6;
+      --btn: #232936; --btn-hover: #2d3444;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+    padding: 16px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  .counts { color: var(--muted); }
+  .spacer { flex: 1; }
+  .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--passed); }
+  .live.off .dot { background: var(--failed); }
+  label.toggle { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); cursor: pointer; }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px 20px 40px; }
+  .notice { padding: 14px 16px; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; }
+  .job {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    margin-bottom: 10px; overflow: hidden;
+  }
+  .row {
+    display: grid; grid-template-columns: 96px 1fr auto; gap: 4px 14px; align-items: center;
+    padding: 12px 14px; cursor: pointer;
+  }
+  .row:hover { background: color-mix(in srgb, var(--btn) 50%, transparent); }
+  .badge {
+    display: inline-block; text-align: center; font-size: 12px; font-weight: 600;
+    padding: 3px 8px; border-radius: 999px; color: var(--state);
+    background: color-mix(in srgb, var(--state) 14%, transparent);
+  }
+  .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .last {
+    grid-column: 2 / 4; color: var(--muted); font: 12.5px/1.4 ui-monospace, Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .actions { display: flex; gap: 6px; }
+  button {
+    font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--btn); color: var(--text);
+  }
+  button:hover { background: var(--btn-hover); }
+  button.danger { color: var(--failed); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .log { border-top: 1px solid var(--line); }
+  .log-head { display: flex; gap: 12px; align-items: center; padding: 8px 14px; color: var(--muted); font-size: 12.5px; }
+  .log-head span { white-space: nowrap; }
+  .log-head code { overflow-wrap: anywhere; }
+  pre {
+    margin: 0; padding: 12px 14px; max-height: 420px; overflow: auto; background: var(--code-bg);
+    color: var(--code-text); font: 12.5px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px);
+    background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: 8px; font-size: 13px;
+    opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 18px; overflow-wrap: anywhere; }
+  @media (max-width: 640px) {
+    header, main { padding-left: 16px; padding-right: 16px; }
+    .row { grid-template-columns: 1fr auto; }
+    .row .badge { justify-self: start; }
+    .row > .info { grid-column: 1 / 3; }
+    .last { grid-column: 1 / 3; }
+    .actions { grid-column: 2; grid-row: 1; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>ptrack</h1>
+  <span class="counts" id="counts"></span>
+  <span class="spacer"></span>
+  <label class="toggle"><input type="checkbox" id="all"> Show older jobs</label>
+  <span class="live" id="live"><span class="dot"></span><span id="live-text">live</span></span>
+</header>
+<main>
+  <div id="jobs"></div>
+  <footer id="footer"></footer>
+</main>
+<div class="toast" id="toast" role="status"></div>
+<script>
+"use strict";
+const params = new URLSearchParams(location.hash.slice(1));
+const token = params.get("t") || "";
+const $ = (id) => document.getElementById(id);
+let openJob = params.get("job");
+let showAll = false;
+try { showAll = localStorage.getItem("ptrack.all") === "1"; } catch (e) {}
+$("all").checked = showAll;
+
+function el(tag, attrs, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") n.className = v;
+    else if (k === "style") n.style.cssText = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null) n.append(c instanceof Node ? c : String(c));
+  return n;
+}
+
+function dur(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s";
+  if (s < 86400) return Math.floor(s / 3600) + "h" + String(Math.floor(s % 3600 / 60)).padStart(2, "0") + "m";
+  return Math.floor(s / 86400) + "d" + String(Math.floor(s % 86400 / 3600)).padStart(2, "0") + "h";
+}
+
+function api(path, opts) {
+  return fetch(path, Object.assign({ headers: { "X-Ptrack-Token": token } }, opts || {}));
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("show"), 3500);
+}
+
+async function act(job, action, button) {
+  if (action === "stop" && !confirm("Stop job " + job.id + " and everything it started?")) return;
+  button.disabled = true;
+  try {
+    const r = await api("/api/jobs/" + job.id + "/" + action, { method: "POST" });
+    const body = await r.json();
+    toast(body.message);
+  } catch (e) {
+    toast("Could not reach ptrack: " + e.message);
+  }
+  refresh();
+}
+
+function title(j) {
+  if (j.label) return j.label;
+  return j.command.map((a) => /\s/.test(a) || a === "" ? '"' + a + '"' : a).join(" ");
+}
+
+function renderJob(j) {
+  const active = j.state === "running" || j.state === "paused";
+  const meta = el("div", { class: "meta" },
+    el("span", {}, "#" + j.id),
+    el("span", {}, ({ running: "running for ", paused: "up for " }[j.state] || "took ") + dur(j.duration_ms)),
+    el("span", {}, "started " + dur(Date.now() - j.started_ms) + " ago"),
+    j.agent ? el("span", {}, "by " + j.agent.split("_")[0]) : null,
+    j.exit_code != null ? el("span", {}, "exit " + j.exit_code) : null,
+    el("span", { title: j.cwd }, j.cwd.split(/[\\/]/).filter(Boolean).pop() || j.cwd),
+  );
+  const actions = el("div", { class: "actions" });
+  if (j.state === "running") {
+    actions.append(el("button", { onclick: (e) => { e.stopPropagation(); act(j, "pause", e.target); } }, "Pause"));
+  }
+  if (j.state === "paused") {
+    actions.append(el("button", { onclick: (e) => { e.stopPropagation(); act(j, "resume", e.target); } }, "Resume"));
+  }
+  if (active) {
+    actions.append(el("button", { class: "danger", onclick: (e) => { e.stopPropagation(); act(j, "stop", e.target); } }, "Stop"));
+  }
+  const toggle = () => {
+    openJob = openJob === j.id ? null : j.id;
+    logView = { id: null, text: "", final: false, top: 0, stick: true };
+    refresh();
+  };
+  const row = el("div", { class: "row", onclick: toggle },
+    el("span", { class: "badge", style: "--state: var(--" + j.state + ")" }, j.state),
+    el("div", { class: "info" }, el("div", { class: "title", title: title(j) }, title(j)), meta),
+    actions,
+    j.last_line ? el("div", { class: "last", title: j.last_line }, j.last_line) : null,
+  );
+  const card = el("div", { class: "job" }, row);
+  if (openJob === j.id) {
+    const pre = el("pre", { id: "log" }, logView.id === j.id ? logView.text : "loading…");
+    card.append(el("div", { class: "log" },
+      el("div", { class: "log-head" }, el("span", {}, "Last 200 lines"), el("code", {}, j.log_path)),
+      pre));
+    if (logView.id === j.id && active === false && logView.final) return card;
+    api("/api/jobs/" + j.id + "/log?lines=200").then((r) => r.text()).then((text) => {
+      logView = { id: j.id, text: text || "(no output yet)", final: !active, top: logView.top, stick: logView.stick };
+      const live = $("log");
+      if (!live) return;
+      live.textContent = logView.text;
+      live.scrollTop = logView.stick ? live.scrollHeight : logView.top;
+    });
+  }
+  return card;
+}
+
+// Log panel state survives the periodic redraw: text, and scroll position
+// (sticks to the bottom unless the reader scrolled up).
+let logView = { id: null, text: "", final: false, top: 0, stick: true };
+function rememberLogScroll() {
+  const pre = $("log");
+  if (!pre) { logView.stick = true; return; }
+  logView.top = pre.scrollTop;
+  logView.stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+}
+
+let inFlight = false;
+async function refresh() {
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    if (!token) {
+      $("jobs").replaceChildren(el("div", { class: "notice" },
+        "Open this page with the link printed by ", el("code", {}, "ptrack ui"), " (it includes an access key)."));
+      return;
+    }
+    const r = await api("/api/jobs" + (showAll ? "?all=1" : ""));
+    if (r.status === 401) throw new Error("access key not accepted; reopen the link from ptrack ui");
+    const data = await r.json();
+    const running = data.jobs.filter((j) => j.state === "running").length;
+    const paused = data.jobs.filter((j) => j.state === "paused").length;
+    $("counts").textContent = running + " running" + (paused ? ", " + paused + " paused" : "");
+    document.title = (running ? "(" + running + ") " : "") + "ptrack jobs";
+    const list = data.jobs.length
+      ? data.jobs.map(renderJob)
+      : [el("div", { class: "notice" }, "No jobs yet. Start one with: ", el("code", {}, "ptrack run -d -- <command>"))];
+    rememberLogScroll();
+    $("jobs").replaceChildren(...list);
+    const pre = $("log");
+    if (pre && logView.id === openJob) pre.scrollTop = logView.stick ? pre.scrollHeight : logView.top;
+    const hidden = data.total - data.jobs.length;
+    $("footer").textContent = (hidden > 0 ? hidden + " older job(s) hidden · " : "") + "Data folder: " + data.home;
+    $("live").classList.remove("off");
+    $("live-text").textContent = "live";
+  } catch (e) {
+    $("live").classList.add("off");
+    $("live-text").textContent = "offline";
+    if (!$("jobs").children.length) $("jobs").replaceChildren(el("div", { class: "notice" }, e.message));
+  } finally {
+    inFlight = false;
+  }
+}
+
+$("all").addEventListener("change", (e) => {
+  showAll = e.target.checked;
+  try { localStorage.setItem("ptrack.all", showAll ? "1" : "0"); } catch (err) {}
+  refresh();
+});
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>

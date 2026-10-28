@@ -16,12 +16,32 @@ tokens) and the agent can make one short call instead of reading a log.
 - **Stops the whole tree:** everything the command started, not just the first process.
 - **Local only.** No account, no network, no telemetry.
 
-Status: v0.1, early. Feedback welcome.
+- **A live dashboard in your browser** (`ptrack ui`) and an **MCP server** for agents (`ptrack mcp`).
+
+Status: v0.2, early. Feedback welcome.
 
 ## Install
 
-Download the file for your system from the Releases page, unpack it, and put `ptrack`
-(`ptrack.exe` on Windows) in a folder on your `PATH`.
+**Linux and macOS:** open a terminal and run:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/MarceloGiazzon/ProcessTrackerForAI/main/install.sh | sh
+```
+
+This installs into `~/.local/bin`. If that folder isn't on your `PATH` yet, the script prints the
+one line that adds it.
+
+**Windows:** open PowerShell and run:
+
+```powershell
+irm https://raw.githubusercontent.com/MarceloGiazzon/ProcessTrackerForAI/main/install.ps1 | iex
+```
+
+This installs into `%LOCALAPPDATA%\Programs\ptrack` and adds that folder to your `PATH`. Open a new
+terminal afterwards.
+
+Both scripts download the latest release from GitHub and check its checksum. Run the same command
+again to upgrade. Or download the file for your system from the Releases page yourself:
 
 | System | File |
 |---|---|
@@ -31,7 +51,7 @@ Download the file for your system from the Releases page, unpack it, and put `pt
 | Mac with Apple chip (M1 and later) | `ptrack-…-aarch64-apple-darwin.tar.gz` |
 | Older Intel Mac | `ptrack-…-x86_64-apple-darwin.tar.gz` |
 
-Or build it from source with Rust installed: `cargo install --path .`
+Or build it from source if you have Rust: `cargo install --path .`
 
 Check that it works: `ptrack version`
 
@@ -80,6 +100,38 @@ migrations) through `ptrack`:
 - To stop a job: `ptrack stop <id>`.
 ```
 
+## Dashboard
+
+```sh
+ptrack ui
+```
+
+This opens a page in your browser with every job, updated live. Click a job to see its output. The
+buttons pause, resume or stop it. The page is reachable only from your own computer and is
+protected by a random key in the link, which changes every time you start `ptrack ui`. Press
+Ctrl+C in the terminal to close it. Options: `--port N` and `--no-open`.
+
+## MCP server (for agents)
+
+`ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
+`jobs_list`, `job_status`, `job_tail`, `job_wait`. It is **read-only by default**. Add
+`--allow-control` to also allow `job_stop`, `job_pause` and `job_resume`. Starting jobs stays in
+the shell (`ptrack run -d ...`) on purpose.
+
+Claude Code:
+
+```sh
+claude mcp add --scope user ptrack -- ptrack mcp
+```
+
+Other MCP clients (Cursor, Gemini CLI, …) use the usual JSON config:
+
+```json
+{ "mcpServers": { "ptrack": { "command": "ptrack", "args": ["mcp"] } } }
+```
+
+## Who started each job
+
 ptrack works out which agent and session started a job by itself when the agent provides that
 information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other agent, use
 `--agent` / `--session`, or set the `PTRACK_AGENT` / `PTRACK_SESSION` environment variables.
@@ -96,6 +148,8 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other 
 | `ptrack stop ID [--grace SECS] [--force]` | Asks the job to exit, then force-stops the whole tree after the grace time (default 5 s). |
 | `ptrack pause ID`, `ptrack resume ID` | Freezes and unfreezes every process of the job. |
 | `ptrack prune [--days N] [--all]` | Deletes finished jobs and their logs (default: older than 7 days). |
+| `ptrack ui [--port N] [--no-open]` | Live dashboard in your browser (this computer only). |
+| `ptrack mcp [--allow-control]` | MCP server over stdio for AI agents. |
 
 Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
 `-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--agent`, `--session`.
@@ -155,9 +209,9 @@ no longer exists, the job is shown as **lost**.
 
 ## Roadmap
 
-- v0.2: a local web page and a live terminal view; an MCP server so agents can call
-  `jobs_list` / `job_status` / `job_stop`; a ready-made Claude Code hook.
-- v0.3: rerun, desktop notifications when a job ends, recipes for more agents.
+- ✅ v0.2: local dashboard (`ptrack ui`) and MCP server (`ptrack mcp`).
+- v0.3: a ready-made Claude Code hook, rerun, desktop notifications when a job ends, recipes for
+  more agents.
 - v1.0: stable record format, signed binaries, winget / Scoop / Homebrew packages.
 
 ## Development

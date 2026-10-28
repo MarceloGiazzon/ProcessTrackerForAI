@@ -36,7 +36,15 @@ try {
 
     Expand-Archive $zip -DestinationPath $work -Force
     New-Item -ItemType Directory -Force $dir | Out-Null
-    Copy-Item (Join-Path $work "ptrack.exe") (Join-Path $dir "ptrack.exe") -Force
+    $exe = Join-Path $dir "ptrack.exe"
+    # Windows cannot overwrite a running .exe (a background job's supervisor
+    # may be using it), but it can rename it. Running jobs keep the old copy.
+    if (Test-Path $exe) {
+        Remove-Item "$exe.old" -Force -ErrorAction SilentlyContinue
+        if (Test-Path "$exe.old") { $old = "$exe.$([guid]::NewGuid()).old" } else { $old = "$exe.old" }
+        Move-Item $exe $old -Force
+    }
+    Copy-Item (Join-Path $work "ptrack.exe") $exe -Force
 } finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }

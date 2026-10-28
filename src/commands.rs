@@ -18,7 +18,8 @@ type CmdResult = Result<i32, String>;
 const RECENT_MS: u64 = 24 * 60 * 60 * 1000;
 const RECENT_MAX: usize = 15;
 
-fn to_json(job: &Job) -> serde_json::Value {
+/// A job as JSON, with the state as it is right now and its duration.
+pub fn to_json(job: &Job) -> serde_json::Value {
     let mut shown = job.clone();
     shown.state = job.effective_state();
     let mut v = serde_json::to_value(&shown).unwrap_or_default();
@@ -26,13 +27,13 @@ fn to_json(job: &Job) -> serde_json::Value {
     v
 }
 
-pub fn list(all: bool, here: bool, json: bool) -> CmdResult {
+/// Jobs worth showing: all active ones plus recent finished ones (or all
+/// with `all`), optionally only those started under `cwd_prefix`.
+/// Also returns how many jobs matched before hiding old ones.
+pub fn visible_jobs(all: bool, cwd_prefix: Option<&str>) -> (Vec<Job>, usize) {
     let mut jobs = job::list_all();
-    if here {
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        jobs.retain(|j| j.cwd.starts_with(&cwd));
+    if let Some(prefix) = cwd_prefix {
+        jobs.retain(|j| j.cwd.starts_with(prefix));
     }
     let total = jobs.len();
     if !all {
@@ -47,6 +48,16 @@ pub fn list(all: bool, here: bool, json: bool) -> CmdResult {
             recent <= RECENT_MAX && now.saturating_sub(ended) < RECENT_MS
         });
     }
+    (jobs, total)
+}
+
+pub fn list(all: bool, here: bool, json: bool) -> CmdResult {
+    let cwd = here.then(|| {
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+    });
+    let (jobs, total) = visible_jobs(all, cwd.as_deref());
 
     if json {
         let out: Vec<_> = jobs.iter().map(to_json).collect();
@@ -230,60 +241,66 @@ pub fn wait(id: Option<&str>, timeout_s: Option<u64>, lines: Option<usize>) -> C
 
 pub fn stop(id: &str, grace_ms: u64) -> CmdResult {
     let j = job::resolve(Some(id))?;
-    let state = j.effective_state();
-    if state == State::Lost {
-        let hint = if cfg!(unix) {
-            j.pid
-                .map(|p| {
-                    format!(
-                        " If its processes survived, they are in process group {p}: kill -- -{p}"
-                    )
-                })
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        println!(
-            "job {} is lost: its supervisor is gone, so there is nothing ptrack still controls.{hint}",
-            j.id
-        );
-        return Ok(1);
-    }
-    if !state.is_active() {
-        println!("job {} already {}", j.id, state.as_str());
-        return Ok(0);
-    }
-    std::fs::write(job::stop_marker(&j.id), grace_ms.to_string())
-        .map_err(|e| format!("cannot write stop request: {e}"))?;
-    if grace_ms > 0 {
+    if j.effective_state().is_active() && grace_ms > 0 {
         println!(
             "stopping job {} (up to {} for it to exit on its own)…",
             j.id,
             fmt_duration(grace_ms)
         );
     }
+    match stop_job(&j, grace_ms)? {
+        Stopped::Already(done) => println!(
+            "job {} already {}",
+            done.id,
+            done.effective_state().as_str()
+        ),
+        Stopped::Now(done) => println!("{}", summary(&done)),
+    }
+    Ok(0)
+}
+
+pub enum Stopped {
+    Already(Job),
+    Now(Job),
+}
+
+/// Asks the job's supervisor to stop it, waits for the recorded end, and
+/// force-stops the tree directly if the supervisor does not react.
+pub fn stop_job(j: &Job, grace_ms: u64) -> Result<Stopped, String> {
+    let state = j.effective_state();
+    if state == State::Lost {
+        let hint = match j.pid {
+            Some(p) if cfg!(unix) => {
+                format!(" If its processes survived, they are in process group {p}: kill -- -{p}")
+            }
+            _ => String::new(),
+        };
+        return Err(format!(
+            "job {} is lost: its supervisor is gone, so there is nothing ptrack still controls.{hint}",
+            j.id
+        ));
+    }
+    if !state.is_active() {
+        return Ok(Stopped::Already(j.clone()));
+    }
+    std::fs::write(job::stop_marker(&j.id), grace_ms.to_string())
+        .map_err(|e| format!("cannot write stop request: {e}"))?;
 
     // The supervisor checks for the request ten times a second.
     if let Some(done) = wait_until_inactive(&j.id, grace_ms + 5_000) {
-        println!("{}", summary(&done));
-        return Ok(0);
+        return Ok(Stopped::Now(done));
     }
     // Supervisor did not react: stop the tree ourselves.
-    let pid = j.pid.unwrap_or(0);
-    platform::kill_external(&j.id, pid).map_err(|e| format!("could not stop job {}: {e}", j.id))?;
-    match wait_until_inactive(&j.id, 3_000) {
-        Some(done) => {
-            println!("{}", summary(&done));
-            Ok(0)
-        }
-        None => {
-            println!(
+    platform::kill_external(&j.id, j.pid.unwrap_or(0))
+        .map_err(|e| format!("could not stop job {}: {e}", j.id))?;
+    wait_until_inactive(&j.id, 3_000)
+        .map(Stopped::Now)
+        .ok_or_else(|| {
+            format!(
                 "job {} was force-stopped, but its supervisor has not recorded the end yet",
                 j.id
-            );
-            Ok(1)
-        }
-    }
+            )
+        })
 }
 
 fn wait_until_inactive(id: &str, within_ms: u64) -> Option<Job> {
@@ -301,18 +318,10 @@ fn wait_until_inactive(id: &str, within_ms: u64) -> Option<Job> {
 
 pub fn pause(id: &str) -> CmdResult {
     let j = job::resolve(Some(id))?;
-    match j.effective_state() {
-        State::Running => {}
-        State::Paused => {
-            println!("job {} is already paused", j.id);
-            return Ok(0);
-        }
-        s => return Err(format!("job {} is {}, not running", j.id, s.as_str())),
+    if !pause_job(&j)? {
+        println!("job {} is already paused", j.id);
+        return Ok(0);
     }
-    let pid = j.pid.ok_or("job has no process yet")?;
-    platform::suspend_external(&j.id, pid)
-        .map_err(|e| format!("could not pause job {}: {e}", j.id))?;
-    let _ = std::fs::write(job::paused_marker(&j.id), now_ms().to_string());
     println!("paused job {} · resume with: ptrack resume {}", j.id, j.id);
     println!("note: while paused, network connections and timers inside the job may time out.");
     Ok(0)
@@ -320,6 +329,26 @@ pub fn pause(id: &str) -> CmdResult {
 
 pub fn resume(id: &str) -> CmdResult {
     let j = job::resolve(Some(id))?;
+    resume_job(&j)?;
+    println!("resumed job {}", j.id);
+    Ok(0)
+}
+
+/// Freezes every process of a running job. Returns false if it was already paused.
+pub fn pause_job(j: &Job) -> Result<bool, String> {
+    match j.effective_state() {
+        State::Running => {}
+        State::Paused => return Ok(false),
+        s => return Err(format!("job {} is {}, not running", j.id, s.as_str())),
+    }
+    let pid = j.pid.ok_or("job has no process yet")?;
+    platform::suspend_external(&j.id, pid)
+        .map_err(|e| format!("could not pause job {}: {e}", j.id))?;
+    let _ = std::fs::write(job::paused_marker(&j.id), now_ms().to_string());
+    Ok(true)
+}
+
+pub fn resume_job(j: &Job) -> Result<(), String> {
     if j.effective_state() != State::Paused {
         return Err(format!(
             "job {} is {}, not paused",
@@ -331,8 +360,7 @@ pub fn resume(id: &str) -> CmdResult {
     platform::resume_external(&j.id, pid)
         .map_err(|e| format!("could not resume job {}: {e}", j.id))?;
     let _ = std::fs::remove_file(job::paused_marker(&j.id));
-    println!("resumed job {}", j.id);
-    Ok(0)
+    Ok(())
 }
 
 pub fn prune(older_than_days: u64) -> CmdResult {
