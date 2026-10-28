@@ -97,6 +97,7 @@
   <span class="counts" id="counts"></span>
   <span class="spacer"></span>
   <label class="toggle"><input type="checkbox" id="all"> Show older jobs</label>
+  <label class="toggle" title="Show a notification on this computer when a job finishes (while this page is open)"><input type="checkbox" id="notify"> Notify when jobs end</label>
   <span class="live" id="live"><span class="dot"></span><span id="live-text">live</span></span>
 </header>
 <main>
@@ -240,6 +241,7 @@ async function refresh() {
     const r = await api("/api/jobs" + (showAll ? "?all=1" : ""));
     if (r.status === 401) throw new Error("access key not accepted; reopen the link from ptrack ui");
     const data = await r.json();
+    notifyFinished(data.jobs);
     const running = data.jobs.filter((j) => j.state === "running").length;
     const paused = data.jobs.filter((j) => j.state === "paused").length;
     $("counts").textContent = running + " running" + (paused ? ", " + paused + " paused" : "");
@@ -269,6 +271,48 @@ $("all").addEventListener("change", (e) => {
   try { localStorage.setItem("ptrack.all", showAll ? "1" : "0"); } catch (err) {}
   refresh();
 });
+
+// Browser notifications when a job this page saw running has ended.
+// Works only while the page is open; the setting is remembered per browser.
+const seenStates = new Map();
+let firstLoad = true;
+let notifyOn = false;
+try { notifyOn = localStorage.getItem("ptrack.notify") === "1"; } catch (e) {}
+const canNotify = "Notification" in window;
+$("notify").checked = notifyOn && canNotify && Notification.permission === "granted";
+$("notify").disabled = !canNotify;
+
+$("notify").addEventListener("change", async (e) => {
+  notifyOn = e.target.checked;
+  if (notifyOn && Notification.permission !== "granted") {
+    // Must be asked from a click; browsers block it otherwise.
+    const answer = await Notification.requestPermission();
+    if (answer !== "granted") {
+      notifyOn = false;
+      e.target.checked = false;
+      toast("Notifications are blocked for this page in your browser settings.");
+    }
+  }
+  try { localStorage.setItem("ptrack.notify", notifyOn ? "1" : "0"); } catch (err) {}
+});
+
+function notifyFinished(jobs) {
+  for (const j of jobs) {
+    const before = seenStates.get(j.id);
+    const wasActive = before === "running" || before === "paused";
+    const isActive = j.state === "running" || j.state === "paused";
+    if (!firstLoad && wasActive && !isActive && notifyOn && canNotify && Notification.permission === "granted") {
+      const body = "took " + dur(j.duration_ms)
+        + (j.exit_code != null ? " · exit " + j.exit_code : "")
+        + (j.last_line ? "\n" + j.last_line : "");
+      const n = new Notification(title(j) + ": " + j.state, { body: body, tag: "ptrack-" + j.id });
+      n.onclick = () => { window.focus(); openJob = j.id; refresh(); n.close(); };
+    }
+    seenStates.set(j.id, j.state);
+  }
+  firstLoad = false;
+}
+
 refresh();
 setInterval(refresh, 1500);
 </script>

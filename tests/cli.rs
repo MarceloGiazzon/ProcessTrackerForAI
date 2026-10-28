@@ -252,9 +252,10 @@ fn dashboard_requires_token_and_local_host() {
         .spawn()
         .unwrap();
     let mut first = String::new();
-    BufReader::new(child.stdout.take().unwrap())
-        .read_line(&mut first)
-        .unwrap();
+    // Keep the reader alive: the server prints a second line, and a closed pipe
+    // would make that `println!` panic and take the server down mid-test.
+    let mut server_stdout = BufReader::new(child.stdout.take().unwrap());
+    server_stdout.read_line(&mut first).unwrap();
     // "ptrack dashboard: http://127.0.0.1:<port>/#t=<token>"
     let url = first.trim().rsplit(' ').next().unwrap().to_string();
     let port: u16 = url
@@ -289,6 +290,10 @@ fn dashboard_requires_token_and_local_host() {
     let (code, page) = http("GET", "/", &host, "");
     assert_eq!(code, 200);
     assert!(page.contains("<title>ptrack jobs</title>"));
+    assert!(
+        page.contains("id=\"notify\""),
+        "notification toggle is on the page"
+    );
     assert_eq!(http("GET", "/api/jobs", &host, "").0, 401);
     assert_eq!(http("GET", "/api/jobs", &host, "wrong").0, 401);
     assert_eq!(

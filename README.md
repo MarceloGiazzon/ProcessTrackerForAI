@@ -112,6 +112,10 @@ buttons pause, resume or stop it. The page is reachable only from your own compu
 protected by a random key in the link, which changes every time you start `ptrack ui`. Press
 Ctrl+C in the terminal to close it. Options: `--port N` and `--no-open`.
 
+Tick **Notify when jobs end** to get a notification from your browser whenever a job finishes.
+This works only while the page is open. The first time, the browser asks for permission. The
+**Rerun** button on a finished job starts its command again, in the same folder.
+
 ## MCP server (for agents)
 
 `ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
