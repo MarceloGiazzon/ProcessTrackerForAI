@@ -66,6 +66,9 @@ pub struct Job {
     /// Start of that prompt's text, when the agent integration recorded it.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Set when this job was started by `ptrack rerun` of another job.
+    #[serde(default)]
+    pub rerun_of: Option<String>,
     pub state: State,
     pub exit_code: Option<i32>,
     pub started_at: String,
@@ -171,6 +174,7 @@ impl Job {
             session: None,
             prompt_id: None,
             prompt: None,
+            rerun_of: None,
             state: State::Running,
             exit_code: None,
             started_at: iso_utc(now),

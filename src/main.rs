@@ -25,6 +25,7 @@ USAGE
   ptrack wait [ID] [--timeout SECS] [-n LINES]  block until the job ends; exits with its code
   ptrack stop ID [--grace SECS] [--force]       stop the job and everything it started
   ptrack pause ID | ptrack resume ID            freeze / unfreeze the whole job
+  ptrack rerun ID [-d] [-q]                     run a finished job's command again (same folder)
   ptrack prune [--days N] [--all]               delete finished jobs (default: older than 7 days)
   ptrack ui [--port N] [--no-open]              live dashboard in your browser (this computer only)
   ptrack mcp [--allow-control]                  MCP server for AI agents (stdio); read-only unless
@@ -136,6 +137,20 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
             p.no_more()?;
             commands::stop(&id, grace * 1000)
         }
+        "rerun" => {
+            let mut p = Parser::new(args);
+            let (mut detach, mut quiet) = (false, false);
+            while let Some(a) = p.next_flag()? {
+                match a.as_str() {
+                    "-d" | "--detach" => detach = true,
+                    "-q" | "--quiet" => quiet = true,
+                    _ => return Err(unknown(&a)),
+                }
+            }
+            let id = p.required_id("rerun")?;
+            p.no_more()?;
+            commands::rerun(&id, detach, quiet)
+        }
         "pause" | "resume" => {
             let mut p = Parser::new(args);
             if let Some(a) = p.next_flag()? {
@@ -237,6 +252,8 @@ fn parse_run(args: VecDeque<String>) -> Result<RunOpts, String> {
             "--agent" => opts.agent = Some(p.value(&a)?),
             "--session" => opts.session = Some(p.value(&a)?),
             "--prompt-id" => opts.prompt_id = Some(p.value(&a)?),
+            "--cwd" => opts.cwd = Some(p.value(&a)?),
+            "--rerun-of" => opts.rerun_of = Some(p.value(&a)?),
             "--background" => opts.background = true,
             "--job-id" => opts.job_id = Some(p.value(&a)?),
             _ => return Err(format!("{} (put the command after --)", unknown(&a))),

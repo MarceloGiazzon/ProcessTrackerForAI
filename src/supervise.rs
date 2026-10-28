@@ -24,6 +24,10 @@ pub struct RunOpts {
     pub agent: Option<String>,
     pub session: Option<String>,
     pub prompt_id: Option<String>,
+    /// Folder to run in (default: the current folder). Used by `rerun`.
+    pub cwd: Option<String>,
+    /// Id of the job this one repeats (`ptrack rerun`).
+    pub rerun_of: Option<String>,
     pub shell: bool,
     pub detach: bool,
     pub quiet: bool,
@@ -43,12 +47,24 @@ pub fn run(opts: RunOpts) -> i32 {
         return 1;
     }
     if opts.detach && !opts.background {
-        return detach(opts);
+        return detach(&opts);
     }
     supervise(opts)
 }
 
-fn detach(opts: RunOpts) -> i32 {
+/// What `start_detached` found once the background supervisor started.
+pub enum Detached {
+    /// The job file exists; the job is running (or already ended).
+    Started(Box<Job>),
+    /// The supervisor started but has not written the job file within 5 s.
+    NotYetReported(String),
+}
+
+/// Starts the job in a background copy of ptrack and waits until it has
+/// written its job file, so an immediate `ptrack status` finds it.
+/// Used by `ptrack run -d`, `ptrack rerun -d`, the dashboard and MCP.
+pub fn start_detached(opts: &RunOpts) -> Result<Detached, String> {
+    job::ensure_dirs().map_err(|e| format!("cannot create data folder: {e}"))?;
     let id = job::fresh_id();
     let mut args: Vec<OsString> = vec![
         "run".into(),
@@ -61,6 +77,8 @@ fn detach(opts: RunOpts) -> i32 {
         ("--agent", &opts.agent),
         ("--session", &opts.session),
         ("--prompt-id", &opts.prompt_id),
+        ("--cwd", &opts.cwd),
+        ("--rerun-of", &opts.rerun_of),
     ] {
         if let Some(v) = value {
             args.push(flag.into());
@@ -73,39 +91,48 @@ fn detach(opts: RunOpts) -> i32 {
     args.push("--".into());
     args.extend(opts.command.iter().map(OsString::from));
 
-    let exe = match std::env::current_exe() {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("ptrack: cannot find own executable: {e}");
-            return 1;
-        }
-    };
-    if let Err(e) = platform::spawn_detached(&exe, &args) {
-        eprintln!("ptrack: could not start background supervisor: {e}");
-        return 1;
-    }
-    // Wait until the supervisor has written the job file, so an immediate
-    // `ptrack status` finds it.
+    let exe = std::env::current_exe().map_err(|e| format!("cannot find own executable: {e}"))?;
+    platform::spawn_detached(&exe, &args)
+        .map_err(|e| format!("could not start background supervisor: {e}"))?;
     let deadline = now_ms() + 5_000;
     loop {
         if let Ok(job) = Job::load(&id) {
             if job.state == State::Failed && job.pid.is_none() {
-                println!(
+                return Err(format!(
                     "job {id} failed to start: {}",
                     job.error.unwrap_or_default()
-                );
-                return 127;
+                ));
             }
+            return Ok(Detached::Started(Box::new(job)));
+        }
+        if now_ms() > deadline {
+            return Ok(Detached::NotYetReported(id));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn detach(opts: &RunOpts) -> i32 {
+    match start_detached(opts) {
+        Ok(Detached::Started(job)) => {
+            let id = &job.id;
             println!("job {id} started in background");
             println!("  log:   {}", job.log_path);
             println!("  check: ptrack status {id}   |   ptrack wait {id}");
-            return 0;
+            0
         }
-        if now_ms() > deadline {
+        Ok(Detached::NotYetReported(id)) => {
             println!("job {id} launched, but has not reported yet; check with: ptrack status {id}");
-            return 0;
+            0
         }
-        thread::sleep(Duration::from_millis(50));
+        Err(msg) if msg.contains("failed to start") => {
+            println!("{msg}");
+            127
+        }
+        Err(msg) => {
+            eprintln!("ptrack: {msg}");
+            1
+        }
     }
 }
 
@@ -133,6 +160,10 @@ fn supervise(opts: RunOpts) -> i32 {
     (job.agent, job.session) = detect_agent(&opts);
     job.prompt_id = opts.prompt_id.clone();
     job.prompt = opts.prompt_id.as_deref().and_then(job::prompt_preview);
+    job.rerun_of = opts.rerun_of.clone();
+    if let Some(dir) = &opts.cwd {
+        job.cwd = dir.clone();
+    }
     let echo = !opts.background && !opts.quiet;
     let speak = !opts.background;
 
@@ -155,6 +186,9 @@ fn supervise(opts: RunOpts) -> i32 {
         c.args(&opts.command[1..]);
         c
     };
+    if let Some(dir) = &opts.cwd {
+        cmd.current_dir(dir);
+    }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

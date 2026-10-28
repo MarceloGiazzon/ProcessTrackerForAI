@@ -148,6 +148,7 @@ function toast(msg) {
 
 async function act(job, action, button) {
   if (action === "stop" && !confirm("Stop job " + job.id + " and everything it started?")) return;
+  if (action === "rerun" && !confirm("Run this again in " + job.cwd + "?\n\n" + title(job))) return;
   button.disabled = true;
   try {
     const r = await api("/api/jobs/" + job.id + "/" + action, { method: "POST" });
@@ -172,6 +173,7 @@ function renderJob(j) {
     el("span", {}, "started " + dur(Date.now() - j.started_ms) + " ago"),
     j.agent ? el("span", {}, "by " + j.agent.split("_")[0]) : null,
     j.exit_code != null ? el("span", {}, "exit " + j.exit_code) : null,
+    j.rerun_of ? el("span", {}, "rerun of #" + j.rerun_of) : null,
     el("span", { title: j.cwd }, j.cwd.split(/[\\/]/).filter(Boolean).pop() || j.cwd),
   );
   const actions = el("div", { class: "actions" });
@@ -183,6 +185,8 @@ function renderJob(j) {
   }
   if (active) {
     actions.append(el("button", { class: "danger", onclick: (e) => { e.stopPropagation(); act(j, "stop", e.target); } }, "Stop"));
+  } else {
+    actions.append(el("button", { onclick: (e) => { e.stopPropagation(); act(j, "rerun", e.target); } }, "Rerun"));
   }
   const toggle = () => {
     openJob = openJob === j.id ? null : j.id;

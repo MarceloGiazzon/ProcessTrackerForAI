@@ -159,6 +159,7 @@ fn handle(mut stream: TcpStream, token: &str, hosts: &[String]) -> std::io::Resu
                 }),
                 "pause" => commands::pause_job(&j).map(|_| format!("paused job {}", j.id)),
                 "resume" => commands::resume_job(&j).map(|_| format!("resumed job {}", j.id)),
+                "rerun" => commands::rerun_detached(&j),
                 other => Err(format!("unknown action '{other}'")),
             });
             let (code, body) = match result {

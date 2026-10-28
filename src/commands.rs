@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::job::{self, Job, State};
 use crate::platform;
-use crate::supervise::summary;
+use crate::supervise::{self, RunOpts, summary};
 use crate::util::{fmt_duration, last_lines, now_ms, truncate};
 
 type CmdResult = Result<i32, String>;
@@ -139,6 +139,9 @@ pub fn status(id: Option<&str>, json: bool) -> CmdResult {
     }
     if let Some(p) = &j.prompt {
         row("prompt", p);
+    }
+    if let Some(r) = &j.rerun_of {
+        row("rerun of", r);
     }
     row(
         "started",
@@ -393,4 +396,49 @@ pub fn prune(older_than_days: u64) -> CmdResult {
     }
     println!("removed {removed} finished job(s)");
     Ok(0)
+}
+
+/// The options that run `j`'s command again, in the same folder, as a new
+/// job linked to the old one. Refuses while `j` is still active.
+pub fn rerun_opts(j: &Job) -> Result<RunOpts, String> {
+    let state = j.effective_state();
+    if state.is_active() {
+        return Err(format!(
+            "job {} is still {}; stop it first (ptrack stop {})",
+            j.id,
+            state.as_str(),
+            j.id
+        ));
+    }
+    Ok(RunOpts {
+        label: j.label.clone(),
+        shell: j.shell,
+        command: j.command.clone(),
+        cwd: Some(j.cwd.clone()),
+        rerun_of: Some(j.id.clone()),
+        ..RunOpts::default()
+    })
+}
+
+pub fn rerun(id: &str, detach: bool, quiet: bool) -> CmdResult {
+    let j = job::resolve(Some(id))?;
+    let mut opts = rerun_opts(&j)?;
+    opts.detach = detach;
+    opts.quiet = quiet;
+    Ok(supervise::run(opts))
+}
+
+/// Starts a rerun in the background; returns a one-line message with the new id.
+/// Used by the dashboard and the MCP server.
+pub fn rerun_detached(j: &Job) -> Result<String, String> {
+    let opts = rerun_opts(j)?;
+    match supervise::start_detached(&opts)? {
+        supervise::Detached::Started(new) => {
+            Ok(format!("started job {} (rerun of {})", new.id, j.id))
+        }
+        supervise::Detached::NotYetReported(new_id) => Ok(format!(
+            "launched job {new_id} (rerun of {}); it has not reported yet",
+            j.id
+        )),
+    }
 }

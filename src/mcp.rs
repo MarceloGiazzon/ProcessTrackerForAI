@@ -149,6 +149,11 @@ fn tool_list(allow_control: bool) -> Vec<Value> {
             "description": "Unfreeze a paused job.",
             "inputSchema": { "type": "object", "properties": { "id": id_param() }, "required": ["id"] }
         }));
+        tools.push(json!({
+            "name": "job_rerun",
+            "description": "Run a finished job's command again, in the same folder, as a new background job. Returns the new job id.",
+            "inputSchema": { "type": "object", "properties": { "id": id_param() }, "required": ["id"] }
+        }));
     }
     tools
 }
@@ -247,6 +252,11 @@ fn call_tool(name: &str, args: &Value, allow_control: bool) -> Result<String, St
             let j = id()?;
             commands::resume_job(&j)?;
             Ok(format!("resumed job {}", j.id))
+        }
+        "job_rerun" => {
+            control("job_rerun")?;
+            let j = id()?;
+            commands::rerun_detached(&j)
         }
         _ => Err(format!("unknown tool '{name}'")),
     }

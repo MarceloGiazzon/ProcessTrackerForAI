@@ -234,7 +234,7 @@ fn mcp_server_lists_jobs_and_guards_control_tools() {
         true,
         &[serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})],
     );
-    assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(replies[0]["result"]["tools"].as_array().unwrap().len(), 8);
 }
 
 #[test]
@@ -300,6 +300,9 @@ fn dashboard_requires_token_and_local_host() {
     let data: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(data["jobs"][0]["state"], "passed");
     assert_eq!(http("POST", "/api/jobs/last/resume", &host, &token).0, 409);
+    let (code, body) = http("POST", "/api/jobs/last/rerun", &host, &token);
+    assert_eq!(code, 200, "{body}");
+    assert!(body.contains("rerun of"), "{body}");
 
     let _ = child.kill();
     let _ = child.wait();
@@ -383,4 +386,58 @@ fn claude_code_hook_wraps_long_commands_and_links_prompts() {
         assert_eq!(job["prompt"], "Run the tests please");
         assert_eq!(job["state"], "failed");
     }
+}
+
+#[test]
+fn rerun_repeats_the_command_in_the_same_folder() {
+    let h = Home::new("rerun");
+    let project = h.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let first = Command::new(env!("CARGO_BIN_EXE_ptrack"))
+        .args([
+            "run",
+            "-q",
+            "-l",
+            "flaky",
+            "-s",
+            "--",
+            "echo x> here.txt && exit 2",
+        ])
+        .current_dir(&project)
+        .env("PTRACK_HOME", &h.0)
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(2));
+    let first = h.json(&["status", "--json"]);
+    std::fs::remove_file(project.join("here.txt")).unwrap();
+
+    // Rerun from a different folder: the command must still run in `project`.
+    let out = h.ptrack(&["rerun", first["id"].as_str().unwrap(), "-q"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "rerun returns the command's exit code"
+    );
+    assert!(
+        project.join("here.txt").exists(),
+        "ran in the original folder"
+    );
+
+    let second = h.json(&["status", "--json"]);
+    assert_ne!(second["id"], first["id"]);
+    assert_eq!(second["rerun_of"], first["id"]);
+    assert_eq!(second["label"], "flaky");
+    assert_eq!(second["cwd"], first["cwd"]);
+    assert_eq!(second["command"], first["command"]);
+}
+
+#[test]
+fn rerun_refuses_a_job_that_is_still_running() {
+    let h = Home::new("rerun-active");
+    let id = h.detach(LONG);
+    sleep(Duration::from_millis(500));
+    let out = h.ptrack(&["rerun", &id]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("still running"));
+    h.ptrack(&["stop", &id, "--force"]);
 }

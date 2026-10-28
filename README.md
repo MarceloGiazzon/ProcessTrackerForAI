@@ -71,6 +71,7 @@ ptrack tail k3f9a2 -f       # watch its output
 ptrack wait k3f9a2          # wait for it; exits with the job's own exit code
 ptrack pause k3f9a2         # freeze it (ptrack resume k3f9a2 to continue)
 ptrack stop k3f9a2          # stop it and everything it started
+ptrack rerun k3f9a2         # run the same command again (in the same folder)
 ```
 
 `ptrack list` looks like this:
@@ -173,6 +174,7 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other 
 | `ptrack wait [ID] [--timeout SECS] [-n LINES]` | Blocks until the job ends. Exits with its code, or 124 on timeout. |
 | `ptrack stop ID [--grace SECS] [--force]` | Asks the job to exit, then force-stops the whole tree after the grace time (default 5 s). |
 | `ptrack pause ID`, `ptrack resume ID` | Freezes and unfreezes every process of the job. |
+| `ptrack rerun ID [-d] [-q]` | Runs a finished job's command again, in the same folder, as a new job linked to the old one. |
 | `ptrack prune [--days N] [--all]` | Deletes finished jobs and their logs (default: older than 7 days). |
 | `ptrack ui [--port N] [--no-open]` | Live dashboard in your browser (this computer only). |
 | `ptrack mcp [--allow-control]` | MCP server over stdio for AI agents. |
