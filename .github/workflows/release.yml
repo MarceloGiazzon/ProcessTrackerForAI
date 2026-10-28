@@ -48,7 +48,8 @@ jobs:
         run: |
           $name = "ptrack-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip"
           Compress-Archive -Path "target/${{ matrix.target }}/release/ptrack.exe", README.md, LICENSE -DestinationPath $name
-          (Get-FileHash $name -Algorithm SHA256).Hash.ToLower() + "  $name" | Out-File "$name.sha256" -Encoding ascii
+          # LF line ending so `sha256sum -c` works on any system.
+          [IO.File]::WriteAllText("$PWD/$name.sha256", (Get-FileHash $name -Algorithm SHA256).Hash.ToLower() + "  $name`n")
           gh release upload "$env:GITHUB_REF_NAME" $name "$name.sha256" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
