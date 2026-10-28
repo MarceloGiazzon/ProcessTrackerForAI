@@ -594,3 +594,95 @@ fn a_hanging_webhook_does_not_delay_the_command() {
         started.elapsed()
     );
 }
+
+/// True while any process of the group exists (signal 0 only checks).
+#[cfg(unix)]
+fn group_alive(pgid: i64) -> bool {
+    // SAFETY: signal 0 delivers nothing.
+    unsafe { libc::kill(-(pgid as i32), 0) == 0 }
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: i64) -> bool {
+    // SAFETY: signal 0 delivers nothing.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(unix)]
+fn eventually(mut condition: impl FnMut() -> bool, secs: u64) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    while std::time::Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    condition()
+}
+
+/// Kills a background job's supervisor with SIGKILL (no chance to clean
+/// up) and returns the job's process group id.
+#[cfg(unix)]
+fn kill_supervisor(h: &Home, id: &str) -> i64 {
+    let job = h.json(&["status", id, "--json"]);
+    let supervisor = job["supervisor_pid"].as_i64().unwrap();
+    let pgid = job["pid"].as_i64().unwrap();
+    assert!(group_alive(pgid), "job is running before the test");
+    // SAFETY: plain syscall on a pid we just read from our own job file.
+    assert_eq!(unsafe { libc::kill(supervisor as i32, libc::SIGKILL) }, 0);
+    pgid
+}
+
+#[cfg(unix)]
+#[test]
+fn killing_the_supervisor_stops_the_job_on_unix() {
+    let h = Home::new("guard");
+    let id = h.detach(LONG);
+    sleep(Duration::from_millis(800));
+    let pgid = kill_supervisor(&h, &id);
+    assert!(
+        eventually(|| !group_alive(pgid), 10),
+        "the job's processes outlived their supervisor"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_paused_job_is_cleaned_up_too_when_its_supervisor_dies() {
+    let h = Home::new("guard-paused");
+    let id = h.detach(LONG);
+    sleep(Duration::from_millis(800));
+    assert!(h.ptrack(&["pause", &id]).status.success());
+    let pgid = kill_supervisor(&h, &id);
+    assert!(
+        eventually(|| !group_alive(pgid), 10),
+        "a paused job outlived its supervisor"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn background_helpers_survive_a_normal_exit_on_unix() {
+    let h = Home::new("guard-helper");
+    let out = h.ptrack(&[
+        "run",
+        "-q",
+        "-s",
+        "--",
+        "sleep 30 >/dev/null 2>&1 & echo $!",
+    ]);
+    assert!(out.status.success());
+    let helper: i64 = h.json(&["status", "--json"])["last_line"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    sleep(Duration::from_millis(500));
+    let alive = pid_alive(helper);
+    // SAFETY: stops the helper this test started.
+    unsafe { libc::kill(helper as i32, libc::SIGKILL) };
+    assert!(
+        alive,
+        "a normal exit must not kill helpers the command left running"
+    );
+}

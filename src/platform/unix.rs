@@ -12,8 +12,31 @@ pub struct Tree {
     pgid: i32,
 }
 
-pub fn prepare(cmd: &mut Command) {
-    cmd.process_group(0);
+/// The supervisor keeps this open for as long as it lives; see `guard.rs`.
+pub type Lifeline = io::PipeWriter;
+
+/// Wraps the command in `ptrack __guard`, which leads a new process group
+/// and stops the whole group if the supervisor ever dies without cleaning
+/// up. The guard's stdin is the lifeline pipe; the command gets /dev/null.
+pub fn prepare(cmd: Command) -> io::Result<(Command, Lifeline)> {
+    let (reader, writer) = io::pipe()?;
+    let mut guard = Command::new(std::env::current_exe()?);
+    guard
+        .arg("__guard")
+        .arg("--")
+        .arg(cmd.get_program())
+        .args(cmd.get_args());
+    if let Some(dir) = cmd.get_current_dir() {
+        guard.current_dir(dir);
+    }
+    for (key, value) in cmd.get_envs() {
+        match value {
+            Some(v) => guard.env(key, v),
+            None => guard.env_remove(key),
+        };
+    }
+    guard.stdin(reader).process_group(0);
+    Ok((guard, writer))
 }
 
 pub fn attach(child: &Child, _id: &str) -> io::Result<Tree> {

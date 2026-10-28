@@ -58,10 +58,16 @@ pub struct Tree {
 // must cross into it from `attach`.
 unsafe impl Send for Tree {}
 
+/// Nothing to keep alive on Windows: the Job Object (see `attach`) already
+/// takes the tree down if the supervisor dies.
+pub type Lifeline = ();
+
 /// Start suspended so the child can join the job before it runs any code or
 /// starts children of its own; a new process group lets us send Ctrl+Break.
-pub fn prepare(cmd: &mut Command) {
-    cmd.creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP);
+pub fn prepare(mut cmd: Command) -> io::Result<(Command, Lifeline)> {
+    cmd.creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP)
+        .stdin(Stdio::null());
+    Ok((cmd, ()))
 }
 
 pub fn attach(child: &Child, id: &str) -> io::Result<Tree> {

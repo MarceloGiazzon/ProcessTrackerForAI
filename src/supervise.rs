@@ -189,10 +189,17 @@ fn supervise(opts: RunOpts) -> i32 {
     if let Some(dir) = &opts.cwd {
         cmd.current_dir(dir);
     }
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    platform::prepare(&mut cmd);
+    // `_lifeline` must stay alive until this function returns: on Unix,
+    // dropping it tells the guard process that the supervisor is gone.
+    // (Naming it `_` instead would drop it immediately.)
+    let (mut cmd, _lifeline) = match platform::prepare(cmd) {
+        Ok(prepared) => prepared,
+        Err(e) => {
+            eprintln!("ptrack: cannot prepare the command: {e}");
+            return 1;
+        }
+    };
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

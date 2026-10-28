@@ -253,7 +253,7 @@ no longer exists, the job is shown as **lost**.
 | Stop, polite first | Ctrl+Break | SIGTERM |
 | Stop, forced | Terminate the Job Object | SIGKILL to the group |
 | Pause / resume | Suspend / resume every process in the job | SIGSTOP / SIGCONT to the group |
-| If the supervisor itself is killed | The tree is killed with it, so nothing is left running unrecorded | The tree may keep running (see limits below) |
+| If the supervisor itself is killed | The Job Object takes the tree down with it | A small guard process (`ptrack __guard`) notices and stops the group: SIGTERM, then SIGKILL after 5 s |
 
 ## Honest limits
 
@@ -262,8 +262,10 @@ no longer exists, the job is shown as **lost**.
   rerun for those.
 - **Polite stop on Windows:** many console programs exit on Ctrl+Break, but some don't. Java prints
   a thread dump; `ping` prints statistics. ptrack then force-stops them when the grace time is up.
-- **On Linux/macOS, a killed supervisor can leave the job running.** It is then shown as `lost`, and
-  `ptrack stop` tells you the process group to kill by hand. Windows doesn't have this problem.
+- **Programs that deliberately detach themselves can escape.** On Linux/macOS, a process that
+  starts its own session (`setsid`, like a system daemon) leaves the job's process group, so
+  stop and pause no longer reach it. The same is true on Windows for a process that breaks away
+  from its Job Object. Normal dev tools don't do this.
 - **Background helpers are left alone after a normal exit.** For example, a Gradle daemon started by
   a build keeps running, just as it would without ptrack. `stop` does kill them.
 - **No input.** Jobs get no keyboard input, so commands that ask questions get an end-of-input
@@ -277,9 +279,10 @@ no longer exists, the job is shown as **lost**.
 ## Roadmap
 
 - ✅ v0.2: local dashboard (`ptrack ui`) and MCP server (`ptrack mcp`).
-- ✅ v0.3 (in progress): Claude Code hook with prompt attribution.
-- Next: rerun, desktop notifications when a job ends, no orphaned processes on Linux/macOS,
-  recipes for more agents.
+- ✅ v0.3: Claude Code hook with prompt attribution.
+- ✅ v0.4: rerun, notifications when a job ends (browser, desktop, webhook), no orphaned processes
+  on Linux/macOS.
+- Next: recipes for more agents (Codex, Cursor, Gemini CLI, Aider).
 - v1.0: stable record format, signed binaries, winget / Scoop / Homebrew packages.
 
 ## Development

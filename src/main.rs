@@ -2,6 +2,8 @@
 
 mod commands;
 mod config;
+#[cfg(unix)]
+mod guard;
 mod hook;
 mod job;
 mod mcp;
@@ -209,6 +211,12 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
             Ok(mcp::serve(allow_control))
         }
         "notify" => notify::command(&args.into_iter().collect::<Vec<_>>()),
+        // Internal, started by the supervisor on Unix: see guard.rs.
+        #[cfg(unix)]
+        "__guard" => {
+            let command: Vec<String> = args.into_iter().skip_while(|a| a != "--").skip(1).collect();
+            Ok(guard::run(&command))
+        }
         "hook" => {
             let what = args.pop_front().unwrap_or_default();
             let mut p = Parser::new(args);
