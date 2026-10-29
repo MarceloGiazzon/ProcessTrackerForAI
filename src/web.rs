@@ -6,18 +6,24 @@
 //! per-run token (sent in a custom header, which also blocks cross-site
 //! requests from web pages); and the Host header must be localhost, which
 //! blocks DNS-rebinding attacks.
+//!
+//! While it runs, the dashboard's port and token are kept in `<home>/ui.json`
+//! (readable only by the user), so the Claude Code hook can show the user a
+//! link to each new job. The token goes to the user, never into job output.
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::fs;
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::commands::{self, Stopped};
 use crate::job;
+use crate::platform;
 use crate::supervise::summary;
 use crate::util::{last_lines, random_token, url_decode};
 
@@ -25,7 +31,22 @@ const PAGE: &str = include_str!("ui.html");
 const DEFAULT_PORT: u16 = 7381;
 
 /// Serves the dashboard. `focus`: a job id to open the page on.
+/// Without `--port`, a dashboard that is already running is reused.
 pub fn serve(port: Option<u16>, open: bool, focus: Option<&str>) -> i32 {
+    let with_focus = |base: String| match focus {
+        Some(id) => format!("{base}&job={id}"),
+        None => base,
+    };
+    if port.is_none() {
+        if let Some(url) = running_url() {
+            let url = with_focus(url);
+            println!("ptrack dashboard (already running): {url}");
+            if open {
+                open_browser(&url);
+            }
+            return 0;
+        }
+    }
     let listener = match port {
         Some(p) => TcpListener::bind(("127.0.0.1", p)),
         None => TcpListener::bind(("127.0.0.1", DEFAULT_PORT))
@@ -41,10 +62,8 @@ pub fn serve(port: Option<u16>, open: bool, focus: Option<&str>) -> i32 {
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
     let token = Arc::new(random_token());
     // The token travels in the URL fragment, which browsers never send to servers or logs.
-    let mut url = format!("http://127.0.0.1:{port}/#t={token}");
-    if let Some(id) = focus {
-        url.push_str(&format!("&job={id}"));
-    }
+    let url = with_focus(format!("http://127.0.0.1:{port}/#t={token}"));
+    save_state(port, &token);
     println!("ptrack dashboard: {url}");
     println!("(only reachable from this computer; press Ctrl+C to stop)");
     if open {
@@ -235,6 +254,56 @@ fn respond(
         body.len()
     )?;
     stream.flush()
+}
+
+fn state_path() -> PathBuf {
+    job::home().join("ui.json")
+}
+
+/// Records where this dashboard listens, for `running_url`. Best effort: the
+/// dashboard works without it, only the hook's links are missing.
+fn save_state(port: u16, token: &str) {
+    let data = json!({ "port": port, "token": token, "pid": std::process::id() }).to_string();
+    let path = state_path();
+    let tmp = path.with_extension("json.tmp");
+    let _ = fs::create_dir_all(job::home())
+        .and_then(|_| write_private(&tmp, data.as_bytes()))
+        .and_then(|_| fs::rename(&tmp, &path));
+}
+
+/// Writes a file only its owner can read: it holds the dashboard's token.
+/// (On Windows the per-user data folder already restricts access.)
+fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)?.write_all(data)
+}
+
+/// The address of a dashboard that is running now, token included. `ui.json`
+/// outlives a dashboard closed with Ctrl+C, so check that its process is
+/// alive and its port answers before trusting it.
+pub fn running_url() -> Option<String> {
+    let text = fs::read_to_string(state_path()).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let port = u16::try_from(v["port"].as_u64()?).ok()?;
+    let pid = u32::try_from(v["pid"].as_u64()?).ok()?;
+    let token = v["token"].as_str()?;
+    if !platform::pid_alive(pid) {
+        return None;
+    }
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).ok()?;
+    Some(format!("http://127.0.0.1:{port}/#t={token}"))
+}
+
+/// A link that opens the running dashboard on one job, if a dashboard runs.
+pub fn job_url(id: &str) -> Option<String> {
+    running_url().map(|url| format!("{url}&job={id}"))
 }
 
 fn open_browser(url: &str) {

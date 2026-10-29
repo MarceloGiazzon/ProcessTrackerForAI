@@ -149,7 +149,11 @@ This opens a page in your browser with every job, updated live. Click a job to s
 buttons pause, resume or stop it. The page is reachable only from your own computer and is
 protected by a random key in the link, which changes every time you start `ptrack ui`. Press
 Ctrl+C in the terminal to close it. Options: `--port N`, `--no-open`, and `--job ID` to open the
-page on one job (it then shows every project and tag, so that job is in view).
+page on one job (it then shows every project and tag, so that job is in view). If a dashboard is
+already running, `ptrack ui` opens that one instead of starting a second.
+
+While the dashboard runs, its address and key are kept in `ui.json` in your data folder (readable
+only by you). That is how the Claude Code hook can give you a clickable link to each new job.
 
 Every job tells you how to follow it. ptrack's first line for a job reads
 `[ptrack] job k3f9a2 started · watch it live: ptrack tail k3f9a2 -f · in your browser: ptrack ui --job k3f9a2`,
@@ -227,10 +231,19 @@ Restart Claude Code afterwards. From then on:
   background command** run through ptrack automatically. Claude sees the same output and exit code
   as before, plus one `[ptrack]` line at the start and one at the end.
 - **You see how to follow each job** as soon as it starts. Claude Code shows a message from the
-  hook itself, so it appears even if Claude doesn't mention the job:
+  hook itself, so it appears even if Claude doesn't mention the job. With the dashboard open
+  (`ptrack ui`), it is a link you can click:
+
+  > This command runs as ptrack job k3f9a2. Watch it in your browser:
+  > http://127.0.0.1:7381/#t=…&job=k3f9a2 (or run "ptrack tail k3f9a2 -f" in a terminal).
+
+  Without the dashboard, it names the commands instead:
 
   > This command runs as ptrack job k3f9a2. To watch it live, run "ptrack tail k3f9a2 -f" in a
   > terminal, or open it in your browser with "ptrack ui --job k3f9a2".
+
+  The link carries the dashboard's key, so it goes only to you, never into the command output
+  that Claude reads.
 - Each job is labelled with the description Claude gave the command, and linked to the **session
   and the prompt** that caused it. A 200-character preview of each prompt is kept locally. Use
   `--no-prompts` if you don't want that.

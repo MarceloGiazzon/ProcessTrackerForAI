@@ -271,6 +271,85 @@ fn ui_can_open_on_one_job() {
 }
 
 #[test]
+fn hook_links_to_a_running_dashboard() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Stdio;
+
+    let h = Home::new("hooklink");
+    let hint = || -> String {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_ptrack"))
+            .args(["hook", "claude-code"])
+            .env("PTRACK_HOME", &h.0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let event = serde_json::json!({
+            "hook_event_name": "PreToolUse", "tool_name": "Bash",
+            "tool_input": { "command": "make", "description": "Build" }
+        });
+        write!(child.stdin.take().unwrap(), "{event}").unwrap();
+        let out = child.wait_with_output().unwrap();
+        let reply: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        reply["systemMessage"].as_str().unwrap().to_string()
+    };
+    assert!(
+        hint().contains("open it in your browser with \"ptrack ui --job "),
+        "no dashboard yet: the command, not a link"
+    );
+
+    let mut ui = Command::new(env!("CARGO_BIN_EXE_ptrack"))
+        .args(["ui", "--no-open", "--port", "0"])
+        .env("PTRACK_HOME", &h.0)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Keep the reader alive: a closed pipe would make the server's next
+    // `println!` panic.
+    let mut ui_out = BufReader::new(ui.stdout.take().unwrap());
+    let mut first = String::new();
+    ui_out.read_line(&mut first).unwrap();
+    let base = first.trim().rsplit(' ').next().unwrap().to_string();
+
+    let with_link = hint();
+    let id = with_link
+        .strip_prefix("This command runs as ptrack job ")
+        .and_then(|rest| rest.split('.').next())
+        .unwrap();
+    assert!(
+        with_link.contains(&format!("Watch it in your browser: {base}&job={id} ")),
+        "{with_link}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(h.0.join("ui.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "the token file is private");
+    }
+
+    // A second `ptrack ui` reuses the running one instead of starting another.
+    let again = h.ptrack(&["ui", "--no-open"]);
+    let again = String::from_utf8_lossy(&again.stdout).to_string();
+    assert!(
+        again.contains("already running") && again.contains(&base),
+        "{again}"
+    );
+
+    // Closed with Ctrl+C or killed: ui.json stays, but is not trusted.
+    let _ = ui.kill();
+    let _ = ui.wait();
+    drop(ui_out);
+    assert!(h.0.join("ui.json").exists());
+    assert!(
+        !hint().contains("http://"),
+        "no link to a dashboard that is gone"
+    );
+}
+
+#[test]
 fn missing_program_fails_cleanly() {
     let h = Home::new("missing");
     let out = h.ptrack(&["run", "-q", "--", "definitely-not-a-real-program-xyz"]);

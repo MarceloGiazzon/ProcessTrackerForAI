@@ -201,11 +201,18 @@ fn program_name(word: &str) -> String {
 
 /// How to follow a job, for the user. Claude Code shows it after its own
 /// "PreToolUse:Bash says:" prefix, so it is a plain sentence, not a list.
+/// With a dashboard open, it leads with a link people can just click.
 pub fn follow_hint(id: &str) -> String {
-    format!(
-        "This command runs as ptrack job {id}. To watch it live, run \"ptrack tail {id} -f\" \
-         in a terminal, or open it in your browser with \"ptrack ui --job {id}\"."
-    )
+    match crate::web::job_url(id) {
+        Some(url) => format!(
+            "This command runs as ptrack job {id}. Watch it in your browser: {url} \
+             (or run \"ptrack tail {id} -f\" in a terminal)."
+        ),
+        None => format!(
+            "This command runs as ptrack job {id}. To watch it live, run \"ptrack tail {id} -f\" \
+             in a terminal, or open it in your browser with \"ptrack ui --job {id}\"."
+        ),
+    }
 }
 
 /// Builds `'<ptrack>' run --job-id <id> -l '<label>' --session .. --prompt-id .. -- "$BASH" -c '<command>'`.

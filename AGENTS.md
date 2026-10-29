@@ -41,6 +41,9 @@ Key idea: **one JSON file per job** (`<home>/jobs/<id>.json`) plus one log file
 4. **Never weaken security.**
    - The web server binds only `127.0.0.1`, and every `/api/` call needs the token and a
      localhost `Host` header. Keep both checks.
+   - The dashboard token is stored only in `<home>/ui.json` while `ptrack ui` runs, written
+     owner-only (0600 on Unix). It may reach the user (the hook's `systemMessage`) but never job
+     output, logs or anything the agent reads.
    - Hooks never approve commands (no `permissionDecision`).
    - Never pass `-ExecutionPolicy Bypass` or similar flags to PowerShell.
    - Pass user-controlled text (job titles, output lines) to other programs through arguments or
