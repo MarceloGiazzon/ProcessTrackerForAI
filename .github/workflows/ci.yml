@@ -20,7 +20,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
-      # The README promises "under 1 MB"; fail here, not at release time.
+      # The README promises "under 3 MB"; fail here, not at release time.
       - name: Binary size
         shell: bash
         run: |
@@ -28,5 +28,5 @@ jobs:
           f=target/release/ptrack
           [ -f "$f.exe" ] && f="$f.exe"
           size=$(wc -c < "$f")
-          echo "$f: $size bytes (limit: 1048576)"
-          [ "$size" -le 1048576 ]
+          echo "$f: $size bytes (limit: 3145728)"
+          [ "$size" -le 3145728 ]

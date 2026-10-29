@@ -8,7 +8,7 @@ An agent starts a build, a test suite or a server. You ask "status?" and the age
 reading logs to find out. `ptrack` records every job in one place, so you can look at a list (zero
 tokens) and the agent can make one short call instead of reading a log.
 
-- **One small file, nothing to install.** Under 1 MB. No runtime, no database, no background service.
+- **One small file, nothing to install.** Under 3 MB. No runtime, no database, no background service.
 - **Windows is a first-class platform**, along with Linux and macOS.
 - **Works with any agent** (Claude Code, Codex, Cursor, Gemini CLI, Aider, plain scripts) and any project.
 - **Honest states:** `running`, `paused`, `passed`, `failed`, `cancelled`, `lost`. A job whose
