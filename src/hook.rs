@@ -199,9 +199,13 @@ fn program_name(word: &str) -> String {
     lower
 }
 
-/// How to follow a job, for the user: one line, plain commands.
+/// How to follow a job, for the user. Claude Code shows it after its own
+/// "PreToolUse:Bash says:" prefix, so it is a plain sentence, not a list.
 pub fn follow_hint(id: &str) -> String {
-    format!("ptrack: job {id} · follow: ptrack tail {id} -f · dashboard: ptrack ui --job {id}")
+    format!(
+        "This command runs as ptrack job {id}. To watch it live, run \"ptrack tail {id} -f\" \
+         in a terminal, or open it in your browser with \"ptrack ui --job {id}\"."
+    )
 }
 
 /// Builds `'<ptrack>' run --job-id <id> -l '<label>' --session .. --prompt-id .. -- "$BASH" -c '<command>'`.

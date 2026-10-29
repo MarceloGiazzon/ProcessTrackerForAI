@@ -272,7 +272,7 @@ fn supervise(opts: RunOpts) -> i32 {
     }
     if echo {
         eprintln!(
-            "[ptrack] job {id} started · follow: ptrack tail {id} -f · dashboard: ptrack ui --job {id}"
+            "[ptrack] job {id} started · watch it live: ptrack tail {id} -f · in your browser: ptrack ui --job {id}"
         );
     }
 

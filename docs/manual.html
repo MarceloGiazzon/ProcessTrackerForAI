@@ -373,7 +373,7 @@ ptrack ui --no-open      <span class="c"># não abrir o navegador sozinho (o end
 ptrack ui --job k3f9a2   <span class="c"># abrir o painel já mostrando esse job</span></code></pre></div>
       <h3>Como acompanhar um job que a IA iniciou</h3>
       <p>Todo job mostra como acompanhá-lo. A primeira linha que o ptrack escreve é assim:</p>
-      <div class="cmd"><pre><code>[ptrack] job k3f9a2 started · follow: ptrack tail k3f9a2 -f · dashboard: ptrack ui --job k3f9a2</code></pre></div>
+      <div class="cmd"><pre><code>[ptrack] job k3f9a2 started · watch it live: ptrack tail k3f9a2 -f · in your browser: ptrack ui --job k3f9a2</code></pre></div>
       <p>Copie um dos dois comandos e rode num terminal: <code>ptrack tail k3f9a2 -f</code> mostra a saída ao vivo ali mesmo, e <code>ptrack ui --job k3f9a2</code> abre o painel no navegador já nesse job.</p>
     </section>
 
@@ -447,7 +447,7 @@ ptrack hook install --project  <span class="c"># só para o projeto atual</span>
       <p><strong>Reinicie o Claude Code</strong> depois de instalar. A partir daí:</p>
       <ul>
         <li>Comandos demorados (builds, testes, instalações, servidores, Docker…) e todo comando em segundo plano viram jobs automaticamente. O Claude vê a mesma saída de antes, com uma linha <code>[ptrack]</code> no início e outra no fim.</li>
-        <li><strong>Você vê como acompanhar cada job</strong> assim que ele começa. O Claude Code mostra uma linha como <code>ptrack: job k3f9a2 · follow: ptrack tail k3f9a2 -f · dashboard: ptrack ui --job k3f9a2</code>. Ela vem do próprio gancho, então aparece mesmo que o Claude não fale do job.</li>
+        <li><strong>Você vê como acompanhar cada job</strong> assim que ele começa. O Claude Code mostra uma mensagem do próprio gancho, então ela aparece mesmo que o Claude não fale do job: <em>“PreToolUse:Bash says: This command runs as ptrack job k3f9a2. To watch it live, run "ptrack tail k3f9a2 -f" in a terminal, or open it in your browser with "ptrack ui --job k3f9a2".”</em> O começo (“PreToolUse:Bash says:”) é do Claude Code. O resto diz: este comando roda como o job k3f9a2 do ptrack; para acompanhar ao vivo, rode o primeiro comando num terminal, ou abra no navegador com o segundo.</li>
         <li>Cada job recebe como nome a descrição que o Claude deu ao comando, e fica ligado à <strong>sessão e ao pedido</strong> que o originou. Uma prévia de até 200 caracteres de cada pedido fica guardada no seu computador. Use <code>--no-prompts</code> se não quiser isso.</li>
         <li><code>--all</code> faz <em>todos</em> os comandos passarem pelo ptrack, não só os demorados.</li>
       </ul>

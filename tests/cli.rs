@@ -590,8 +590,8 @@ fn claude_code_hook_wraps_long_commands_and_links_prompts() {
     // job before it starts (systemMessage reaches the user, not the agent).
     let hint = reply["systemMessage"].as_str().unwrap();
     let id = hint
-        .strip_prefix("ptrack: job ")
-        .and_then(|rest| rest.split(' ').next())
+        .strip_prefix("This command runs as ptrack job ")
+        .and_then(|rest| rest.split('.').next())
         .unwrap();
     assert!(
         hint.contains(&format!("ptrack tail {id} -f"))

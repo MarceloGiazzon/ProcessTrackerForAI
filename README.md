@@ -152,7 +152,7 @@ Ctrl+C in the terminal to close it. Options: `--port N`, `--no-open`, and `--job
 page on one job (it then shows every project and tag, so that job is in view).
 
 Every job tells you how to follow it. ptrack's first line for a job reads
-`[ptrack] job k3f9a2 started · follow: ptrack tail k3f9a2 -f · dashboard: ptrack ui --job k3f9a2`,
+`[ptrack] job k3f9a2 started · watch it live: ptrack tail k3f9a2 -f · in your browser: ptrack ui --job k3f9a2`,
 and the agent instructions and the MCP server ask agents to end their reply with the same hint.
 
 Tick **Notify when jobs end** to get a notification from your browser whenever a job finishes.
@@ -226,9 +226,11 @@ Restart Claude Code afterwards. From then on:
 - **Long-running commands** (builds, tests, installs, servers, Docker, and similar) and **every
   background command** run through ptrack automatically. Claude sees the same output and exit code
   as before, plus one `[ptrack]` line at the start and one at the end.
-- **You see how to follow each job** as soon as it starts: Claude Code shows a line such as
-  `ptrack: job k3f9a2 · follow: ptrack tail k3f9a2 -f · dashboard: ptrack ui --job k3f9a2`.
-  It comes from the hook itself, so it appears even if Claude doesn't mention the job.
+- **You see how to follow each job** as soon as it starts. Claude Code shows a message from the
+  hook itself, so it appears even if Claude doesn't mention the job:
+
+  > This command runs as ptrack job k3f9a2. To watch it live, run "ptrack tail k3f9a2 -f" in a
+  > terminal, or open it in your browser with "ptrack ui --job k3f9a2".
 - Each job is labelled with the description Claude gave the command, and linked to the **session
   and the prompt** that caused it. A 200-character preview of each prompt is kept locally. Use
   `--no-prompts` if you don't want that.
