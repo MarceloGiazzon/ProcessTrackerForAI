@@ -369,7 +369,12 @@ export PTRACK_TAG="CI Watch"        <span class="c"># macOS e Linux</span></code
       <h3>Segurança do painel</h3>
       <p>A página só pode ser aberta <strong>do seu próprio computador</strong>. O endereço contém uma chave aleatória, que muda toda vez que você roda <code>ptrack ui</code>. Para fechar o painel, volte ao terminal e aperte <strong>Ctrl+C</strong>.</p>
       <div class="cmd"><pre><code>ptrack ui --port 8765    <span class="c"># usar uma porta fixa</span>
-ptrack ui --no-open      <span class="c"># não abrir o navegador sozinho (o endereço aparece no terminal)</span></code></pre></div>
+ptrack ui --no-open      <span class="c"># não abrir o navegador sozinho (o endereço aparece no terminal)</span>
+ptrack ui --job k3f9a2   <span class="c"># abrir o painel já mostrando esse job</span></code></pre></div>
+      <h3>Como acompanhar um job que a IA iniciou</h3>
+      <p>Todo job mostra como acompanhá-lo. A primeira linha que o ptrack escreve é assim:</p>
+      <div class="cmd"><pre><code>[ptrack] job k3f9a2 started · follow: ptrack tail k3f9a2 -f · dashboard: ptrack ui --job k3f9a2</code></pre></div>
+      <p>Copie um dos dois comandos e rode num terminal: <code>ptrack tail k3f9a2 -f</code> mostra a saída ao vivo ali mesmo, e <code>ptrack ui --job k3f9a2</code> abre o painel no navegador já nesse job.</p>
     </section>
 
     <section id="avisos" data-title="Avisos quando um job termina">
@@ -421,7 +426,10 @@ migrations) through `ptrack`:
 - In the foreground with little output: `ptrack run -q -- &lt;command&gt;`. It prints one summary line,
   plus the last lines on failure.
 - To stop a job: `ptrack stop &lt;id&gt;`.
-- Add `--tag "&lt;tag&gt;"` to group related jobs; `ptrack list --tag "&lt;tag&gt;"` shows only those.</code></pre></div>
+- Add `--tag "&lt;tag&gt;"` to group related jobs; `ptrack list --tag "&lt;tag&gt;"` shows only those.
+- After starting a job, end your reply with one line telling the user how to follow it, e.g.
+  `ptrack job &lt;id&gt;: follow with "ptrack tail &lt;id&gt; -f", or open "ptrack ui --job &lt;id&gt;".`</code></pre></div>
+      <p>A última linha pede à IA que, ao iniciar um job, termine a resposta dizendo como você pode acompanhá-lo. O servidor MCP faz o mesmo pedido aos agentes que o usam.</p>
       <p>O texto está em inglês de propósito: é o idioma que os agentes seguem com mais precisão.</p>
 
       <h3>2. Servidor MCP</h3>
@@ -439,6 +447,7 @@ ptrack hook install --project  <span class="c"># só para o projeto atual</span>
       <p><strong>Reinicie o Claude Code</strong> depois de instalar. A partir daí:</p>
       <ul>
         <li>Comandos demorados (builds, testes, instalações, servidores, Docker…) e todo comando em segundo plano viram jobs automaticamente. O Claude vê a mesma saída de antes, com uma linha <code>[ptrack]</code> no início e outra no fim.</li>
+        <li><strong>Você vê como acompanhar cada job</strong> assim que ele começa. O Claude Code mostra uma linha como <code>ptrack: job k3f9a2 · follow: ptrack tail k3f9a2 -f · dashboard: ptrack ui --job k3f9a2</code>. Ela vem do próprio gancho, então aparece mesmo que o Claude não fale do job.</li>
         <li>Cada job recebe como nome a descrição que o Claude deu ao comando, e fica ligado à <strong>sessão e ao pedido</strong> que o originou. Uma prévia de até 200 caracteres de cada pedido fica guardada no seu computador. Use <code>--no-prompts</code> se não quiser isso.</li>
         <li><code>--all</code> faz <em>todos</em> os comandos passarem pelo ptrack, não só os demorados.</li>
       </ul>
@@ -563,7 +572,7 @@ PTRACK_AGENT=aider aider               <span class="c"># macOS e Linux</span></c
           <tr><td><code>ptrack pause ID</code> / <code>resume ID</code></td><td>Congela e descongela.</td></tr>
           <tr><td><code>ptrack rerun ID [-d] [-q]</code></td><td>Roda de novo um job terminado.</td></tr>
           <tr><td><code>ptrack prune [--days N] [--all]</code></td><td>Apaga jobs terminados (padrão: mais de 7 dias).</td></tr>
-          <tr><td><code>ptrack ui [--port N] [--no-open]</code></td><td>Painel no navegador.</td></tr>
+          <tr><td><code>ptrack ui [--port N] [--no-open] [--job ID]</code></td><td>Painel no navegador; <code>--job</code> abre já num job.</td></tr>
           <tr><td><code>ptrack mcp [--allow-control]</code></td><td>Servidor MCP para agentes.</td></tr>
           <tr><td><code>ptrack hook install / uninstall</code></td><td>Gancho automático do Claude Code.</td></tr>
           <tr><td><code>ptrack notify on|off|test|min-seconds N</code></td><td>Notificações na área de trabalho.</td></tr>

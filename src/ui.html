@@ -126,10 +126,13 @@ let showAll = false;
 try { showAll = localStorage.getItem("ptrack.all") === "1"; } catch (e) {}
 $("all").checked = showAll;
 // Project and tag filters, remembered per browser like "Show older jobs".
+// A link to one job (`ptrack ui --job ID`) ignores them, so that job is shown.
 const filters = { project: "", tag: "" };
 try {
-  filters.project = localStorage.getItem("ptrack.project") || "";
-  filters.tag = localStorage.getItem("ptrack.tag") || "";
+  if (!openJob) {
+    filters.project = localStorage.getItem("ptrack.project") || "";
+    filters.tag = localStorage.getItem("ptrack.tag") || "";
+  }
 } catch (e) {}
 
 function el(tag, attrs, ...children) {

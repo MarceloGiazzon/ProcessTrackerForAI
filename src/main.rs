@@ -32,7 +32,8 @@ USAGE
   ptrack pause ID | ptrack resume ID            freeze / unfreeze the whole job
   ptrack rerun ID [-d] [-q]                     run a finished job's command again (same folder)
   ptrack prune [--days N] [--all]               delete finished jobs (default: older than 7 days)
-  ptrack ui [--port N] [--no-open]              live dashboard in your browser (this computer only)
+  ptrack ui [--port N] [--no-open] [--job ID]   live dashboard in your browser (this computer only);
+                                                --job opens it on that job
   ptrack mcp [--allow-control]                  MCP server for AI agents (stdio); read-only unless
                                                 --allow-control (adds stop / pause / resume / rerun)
   ptrack hook install [--project] [--all] [--no-prompts]
@@ -204,16 +205,23 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
         }
         "ui" | "dashboard" => {
             let mut p = Parser::new(args);
-            let (mut port, mut open) = (None, true);
+            let (mut port, mut open, mut focus) = (None, true, None);
             while let Some(a) = p.next_flag()? {
                 match a.as_str() {
                     "--port" | "-p" => port = Some(p.number(&a)?),
                     "--no-open" => open = false,
+                    "--job" => focus = Some(p.value(&a)?),
                     _ => return Err(unknown(&a)),
                 }
             }
             p.no_more()?;
-            Ok(web::serve(port, open))
+            // Resolve now, so a prefix or `last` becomes the full id and a
+            // wrong id fails here instead of in the browser.
+            let focus = match focus {
+                Some(q) => Some(job::resolve(Some(&q))?.id),
+                None => None,
+            };
+            Ok(web::serve(port, open, focus.as_deref()))
         }
         "mcp" => {
             let mut p = Parser::new(args);

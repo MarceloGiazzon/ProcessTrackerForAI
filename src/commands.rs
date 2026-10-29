@@ -33,6 +33,8 @@ migrations) through `ptrack`:
   plus the last lines on failure.
 - To stop a job: `ptrack stop <id>`.
 - Add `--tag \"<tag>\"` to group related jobs; `ptrack list --tag \"<tag>\"` shows only those.
+- After starting a job, end your reply with one line telling the user how to follow it, e.g.
+  `ptrack job <id>: follow with \"ptrack tail <id> -f\", or open \"ptrack ui --job <id>\".`
 ";
 
 /// A job as JSON, with the state as it is right now and its duration.

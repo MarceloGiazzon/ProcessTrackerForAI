@@ -123,6 +123,7 @@ fn detach(opts: &RunOpts) -> i32 {
             println!("job {id} started in background");
             println!("  log:   {}", job.log_path);
             println!("  check: ptrack status {id}   |   ptrack wait {id}");
+            println!("  watch: ptrack tail {id} -f   |   ptrack ui --job {id}");
             0
         }
         Ok(Detached::NotYetReported(id)) => {
@@ -270,7 +271,9 @@ fn supervise(opts: RunOpts) -> i32 {
         eprintln!("ptrack: cannot write job file: {e}");
     }
     if echo {
-        eprintln!("[ptrack] job {id} started · log: {}", job.log_path);
+        eprintln!(
+            "[ptrack] job {id} started · follow: ptrack tail {id} -f · dashboard: ptrack ui --job {id}"
+        );
     }
 
     let last = Arc::new(Mutex::new(None::<String>));

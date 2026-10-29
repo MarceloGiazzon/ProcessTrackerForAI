@@ -24,7 +24,8 @@ use crate::util::{last_lines, random_token, url_decode};
 const PAGE: &str = include_str!("ui.html");
 const DEFAULT_PORT: u16 = 7381;
 
-pub fn serve(port: Option<u16>, open: bool) -> i32 {
+/// Serves the dashboard. `focus`: a job id to open the page on.
+pub fn serve(port: Option<u16>, open: bool, focus: Option<&str>) -> i32 {
     let listener = match port {
         Some(p) => TcpListener::bind(("127.0.0.1", p)),
         None => TcpListener::bind(("127.0.0.1", DEFAULT_PORT))
@@ -40,7 +41,10 @@ pub fn serve(port: Option<u16>, open: bool) -> i32 {
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
     let token = Arc::new(random_token());
     // The token travels in the URL fragment, which browsers never send to servers or logs.
-    let url = format!("http://127.0.0.1:{port}/#t={token}");
+    let mut url = format!("http://127.0.0.1:{port}/#t={token}");
+    if let Some(id) = focus {
+        url.push_str(&format!("&job={id}"));
+    }
     println!("ptrack dashboard: {url}");
     println!("(only reachable from this computer; press Ctrl+C to stop)");
     if open {

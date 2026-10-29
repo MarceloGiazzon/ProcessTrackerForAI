@@ -228,7 +228,46 @@ fn instructions_print_the_agent_block() {
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.starts_with("## Long-running commands"), "{text}");
     assert!(text.contains("ptrack run -d") && text.contains("ptrack wait"));
+    assert!(
+        text.contains("ptrack ui --job <id>"),
+        "tells the agent to show the user how to follow a job"
+    );
     assert!(text.is_ascii(), "safe for any shell redirection");
+}
+
+#[test]
+fn ui_can_open_on_one_job() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let h = Home::new("uijob");
+    let bad = h.ptrack(&["ui", "--no-open", "--port", "0", "--job", "nope"]);
+    assert_eq!(
+        bad.status.code(),
+        Some(2),
+        "unknown job fails before serving"
+    );
+
+    h.ptrack(&["run", "-q", "-s", "--", "echo hi"]);
+    let id = h.json(&["status", "--json"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ptrack"))
+        .args(["ui", "--no-open", "--port", "0", "--job", "last"])
+        .env("PTRACK_HOME", &h.0)
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = String::new();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    out.read_line(&mut first).unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        first.trim().ends_with(&format!("&job={id}")),
+        "`last` is resolved to the full id in the link: {first}"
+    );
 }
 
 #[test]
@@ -547,8 +586,22 @@ fn claude_code_hook_wraps_long_commands_and_links_prompts() {
     );
     assert_eq!(updated["timeout"], 5000, "other tool fields are kept");
     let command = updated["command"].as_str().unwrap();
+    // The hook picks the job id, so it can tell the user how to follow the
+    // job before it starts (systemMessage reaches the user, not the agent).
+    let hint = reply["systemMessage"].as_str().unwrap();
+    let id = hint
+        .strip_prefix("ptrack: job ")
+        .and_then(|rest| rest.split(' ').next())
+        .unwrap();
     assert!(
-        command.contains(" run -l 'Run tests' --session 's1' --prompt-id "),
+        hint.contains(&format!("ptrack tail {id} -f"))
+            && hint.contains(&format!("ptrack ui --job {id}")),
+        "{hint}"
+    );
+    assert!(
+        command.contains(&format!(
+            " run --job-id '{id}' -l 'Run tests' --session 's1' --prompt-id "
+        )),
         "{command}"
     );
 
@@ -567,6 +620,7 @@ fn claude_code_hook_wraps_long_commands_and_links_prompts() {
             "the agent sees the command's own exit code"
         );
         let job = h.json(&["status", "--json"]);
+        assert_eq!(job["id"], id, "the job got the id the user was shown");
         assert_eq!(job["label"], "Run tests");
         assert_eq!(job["prompt"], "Run the tests please");
         assert_eq!(job["state"], "failed");

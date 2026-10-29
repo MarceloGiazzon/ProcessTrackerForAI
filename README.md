@@ -132,6 +132,8 @@ migrations) through `ptrack`:
   plus the last lines on failure.
 - To stop a job: `ptrack stop <id>`.
 - Add `--tag "<tag>"` to group related jobs; `ptrack list --tag "<tag>"` shows only those.
+- After starting a job, end your reply with one line telling the user how to follow it, e.g.
+  `ptrack job <id>: follow with "ptrack tail <id> -f", or open "ptrack ui --job <id>".`
 ```
 
 **Step-by-step setup for Codex, Cursor, Antigravity CLI / Gemini CLI and Aider** (instructions file,
@@ -146,7 +148,12 @@ ptrack ui
 This opens a page in your browser with every job, updated live. Click a job to see its output. The
 buttons pause, resume or stop it. The page is reachable only from your own computer and is
 protected by a random key in the link, which changes every time you start `ptrack ui`. Press
-Ctrl+C in the terminal to close it. Options: `--port N` and `--no-open`.
+Ctrl+C in the terminal to close it. Options: `--port N`, `--no-open`, and `--job ID` to open the
+page on one job (it then shows every project and tag, so that job is in view).
+
+Every job tells you how to follow it. ptrack's first line for a job reads
+`[ptrack] job k3f9a2 started · follow: ptrack tail k3f9a2 -f · dashboard: ptrack ui --job k3f9a2`,
+and the agent instructions and the MCP server ask agents to end their reply with the same hint.
 
 Tick **Notify when jobs end** to get a notification from your browser whenever a job finishes.
 This works only while the page is open. The first time, the browser asks for permission. The
@@ -219,6 +226,9 @@ Restart Claude Code afterwards. From then on:
 - **Long-running commands** (builds, tests, installs, servers, Docker, and similar) and **every
   background command** run through ptrack automatically. Claude sees the same output and exit code
   as before, plus one `[ptrack]` line at the start and one at the end.
+- **You see how to follow each job** as soon as it starts: Claude Code shows a line such as
+  `ptrack: job k3f9a2 · follow: ptrack tail k3f9a2 -f · dashboard: ptrack ui --job k3f9a2`.
+  It comes from the hook itself, so it appears even if Claude doesn't mention the job.
 - Each job is labelled with the description Claude gave the command, and linked to the **session
   and the prompt** that caused it. A 200-character preview of each prompt is kept locally. Use
   `--no-prompts` if you don't want that.
@@ -253,7 +263,7 @@ agent (Aider, for example), use `--agent` / `--session`, or set the `PTRACK_AGEN
 | `ptrack pause ID`, `ptrack resume ID` | Freezes and unfreezes every process of the job. |
 | `ptrack rerun ID [-d] [-q]` | Runs a finished job's command again, in the same folder, as a new job linked to the old one. |
 | `ptrack prune [--days N] [--all]` | Deletes finished jobs and their logs (default: older than 7 days). |
-| `ptrack ui [--port N] [--no-open]` | Live dashboard in your browser (this computer only). |
+| `ptrack ui [--port N] [--no-open] [--job ID]` | Live dashboard in your browser (this computer only); `--job` opens it on one job. |
 | `ptrack mcp [--allow-control]` | MCP server over stdio for AI agents. |
 | `ptrack hook install [--project] [--all] [--no-prompts]` | Claude Code hook: long commands run through ptrack automatically. |
 | `ptrack hook uninstall [--project]` | Removes the hook. |

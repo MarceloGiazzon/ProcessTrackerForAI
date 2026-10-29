@@ -4,7 +4,9 @@
 //! - PreToolUse (Bash): long-running commands (and every background command)
 //!   are rewritten to run through `ptrack run`, labelled with the tool call's
 //!   description and tagged with the session and prompt ids. No other change:
-//!   the agent sees the same output and exit code.
+//!   the agent sees the same output and exit code. The hook picks the job id
+//!   itself, so its reply can tell the user (`systemMessage`) how to follow
+//!   the job before it even starts.
 //! - UserPromptSubmit: keeps a short preview of each prompt, so jobs can show
 //!   which request started them.
 //!
@@ -125,8 +127,10 @@ fn pre_tool_use(event: &Value, wrap_all: bool) -> Option<Value> {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
+    let id = job::fresh_id();
     let wrapped = wrap(
         &exe.display().to_string(),
+        &id,
         command,
         input["description"].as_str(),
         event["session_id"].as_str(),
@@ -136,6 +140,8 @@ fn pre_tool_use(event: &Value, wrap_all: bool) -> Option<Value> {
     let mut updated = input.clone();
     updated["command"] = Value::String(wrapped);
     Some(json!({
+        // Shown to the user only; the agent sees the job id in the output.
+        "systemMessage": follow_hint(&id),
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "updatedInput": updated,
@@ -193,16 +199,27 @@ fn program_name(word: &str) -> String {
     lower
 }
 
-/// Builds `'<ptrack>' run -l '<label>' --session .. --prompt-id .. -- "$BASH" -c '<command>'`.
+/// How to follow a job, for the user: one line, plain commands.
+pub fn follow_hint(id: &str) -> String {
+    format!("ptrack: job {id} · follow: ptrack tail {id} -f · dashboard: ptrack ui --job {id}")
+}
+
+/// Builds `'<ptrack>' run --job-id <id> -l '<label>' --session .. --prompt-id .. -- "$BASH" -c '<command>'`.
 /// The command keeps running in the same kind of shell the agent uses.
 pub fn wrap(
     exe: &str,
+    id: &str,
     command: &str,
     label: Option<&str>,
     session: Option<&str>,
     prompt_id: Option<&str>,
 ) -> String {
-    let mut parts = vec![sh_quote(&exe.replace('\\', "/")), "run".to_string()];
+    let mut parts = vec![
+        sh_quote(&exe.replace('\\', "/")),
+        "run".to_string(),
+        "--job-id".to_string(),
+        sh_quote(id),
+    ];
     let label = label.filter(|l| !l.trim().is_empty());
     for (flag, value) in [
         ("-l", label),
@@ -443,12 +460,13 @@ mod tests {
     fn wrap_quotes_everything() {
         let w = wrap(
             "C:\\p\\ptrack.exe",
+            "ab12cd",
             "echo 'hi' && make",
             Some("Build it's thing"),
             Some("s1"),
             None,
         );
-        assert!(w.starts_with("'C:/p/ptrack.exe' run -l 'Build it'\\''s thing' --session 's1' -- \"${BASH:-${SHELL:-sh}}\" -c '"));
+        assert!(w.starts_with("'C:/p/ptrack.exe' run --job-id 'ab12cd' -l 'Build it'\\''s thing' --session 's1' -- \"${BASH:-${SHELL:-sh}}\" -c '"));
         assert!(w.ends_with("echo '\\''hi'\\'' && make'"));
     }
 

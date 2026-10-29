@@ -22,7 +22,9 @@ const INSTRUCTIONS: &str = "\
 ptrack tracks long-running commands (builds, tests, servers). Start them in the shell with \
 `ptrack run -d -l \"<label>\" -- <command>`; it prints a job id. Then use these tools to check \
 on them cheaply instead of reading log files: jobs_list for an overview, job_status for one \
-job, job_tail for recent output, job_wait to block until a job ends.";
+job, job_tail for recent output, job_wait to block until a job ends. Whenever a job is started \
+or checked, end your reply with one line telling the user how to follow it themselves: \
+`ptrack tail <id> -f` in a terminal, or `ptrack ui --job <id>` for the dashboard in a browser.";
 
 pub fn serve(allow_control: bool) -> i32 {
     let stdin = io::stdin();
