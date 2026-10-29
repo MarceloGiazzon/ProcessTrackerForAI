@@ -18,7 +18,7 @@ tokens) and the agent can make one short call instead of reading a log.
 
 - **A live dashboard in your browser** (`ptrack ui`) and an **MCP server** for agents (`ptrack mcp`).
 
-Status: v0.2, early. Feedback welcome.
+Status: v0.4, early. Feedback welcome.
 
 ## Install
 
@@ -151,8 +151,9 @@ so only send them to a service you trust.
 
 `ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
 `jobs_list`, `job_status`, `job_tail`, `job_wait`. It is **read-only by default**. Add
-`--allow-control` to also allow `job_stop`, `job_pause` and `job_resume`. Starting jobs stays in
-the shell (`ptrack run -d ...`) on purpose.
+`--allow-control` to also allow `job_stop`, `job_pause`, `job_resume` and `job_rerun` (which runs
+a finished job's command again). Starting new commands stays in the shell (`ptrack run -d ...`)
+on purpose.
 
 Claude Code:
 

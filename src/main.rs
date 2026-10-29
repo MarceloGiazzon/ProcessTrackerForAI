@@ -33,7 +33,7 @@ USAGE
   ptrack prune [--days N] [--all]               delete finished jobs (default: older than 7 days)
   ptrack ui [--port N] [--no-open]              live dashboard in your browser (this computer only)
   ptrack mcp [--allow-control]                  MCP server for AI agents (stdio); read-only unless
-                                                --allow-control (adds stop / pause / resume)
+                                                --allow-control (adds stop / pause / resume / rerun)
   ptrack hook install [--project] [--all] [--no-prompts]
                                                 make Claude Code run long commands through ptrack
   ptrack hook uninstall [--project]             remove that hook again
