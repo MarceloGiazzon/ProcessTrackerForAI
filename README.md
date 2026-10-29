@@ -77,11 +77,34 @@ ptrack rerun k3f9a2         # run the same command again (in the same folder)
 `ptrack list` looks like this:
 
 ```
-ID      STATE         TIME   STARTED  AGENT        WHAT                     LAST LINE
-k3f9a2  running      3m04s  3m04s ago claude-code  full build               > Task :app:compileJava
-x9ewes  passed         41s    12m ago claude-code  npm test                 Tests: 212 passed, 212 total
-cexj44  failed          2s     1h ago -            ./deploy.sh              error: missing API_URL
+ID      STATE         TIME   STARTED  PROJECT              TAG          AGENT        WHAT                           LAST LINE
+k3f9a2  running      3m04s  3m04s ago NPDev                CI Watch     claude-code  full build                     > Task :app:compileJava
+x9ewes  passed         41s    12m ago NPDev                -            claude-code  npm test                       Tests: 212 passed, 212 total
+cexj44  failed          2s     1h ago website              -            -            ./deploy.sh                    error: missing API_URL
 ```
+
+Run commands from inside your project's folder: `npm test` needs the folder with
+`package.json`, and `gradle build` needs Gradle installed. ptrack runs the command exactly as you
+would, so it fails the same way when it would fail without ptrack.
+
+## Projects and tags
+
+Every job belongs to a **project**, shown in the `PROJECT` column. ptrack works it out by itself:
+it is the name of the git repository the command ran in (so a job started in `NPDev/src/app`
+belongs to `NPDev`). Outside a repository it is the name of the current folder. Set it yourself
+with `--project NAME` or the `PTRACK_PROJECT` environment variable.
+
+A **tag** is an optional free-form word or phrase to group jobs across projects, such as
+`CI Watch`, `nightly` or `release`. Set it with `--tag TAG` or `PTRACK_TAG`.
+
+```sh
+ptrack run -d --tag "CI Watch" -- gh run watch 1234   # project: worked out from the folder
+ptrack list --project NPDev                           # only that project's jobs
+ptrack list --tag "ci watch"                          # only jobs with that tag (any case)
+```
+
+`ptrack rerun` keeps the project and the tag. The dashboard shows both on every job, and the MCP
+tool `jobs_list` accepts `project` and `tag` filters.
 
 ## Tell your AI agent to use it
 
@@ -150,7 +173,7 @@ so only send them to a service you trust.
 ## MCP server (for agents)
 
 `ptrack mcp` lets MCP-capable agents ask about jobs with one small tool call. Tools:
-`jobs_list`, `job_status`, `job_tail`, `job_wait`. It is **read-only by default**. Add
+`jobs_list` (filters: `project`, `tag`, `cwd`, `all`), `job_status`, `job_tail`, `job_wait`. It is **read-only by default**. Add
 `--allow-control` to also allow `job_stop`, `job_pause`, `job_resume` and `job_rerun` (which runs
 a finished job's command again). Starting new commands stays in the shell (`ptrack run -d ...`)
 on purpose.
@@ -204,7 +227,7 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other 
 | Command | What it does |
 |---|---|
 | `ptrack run [options] -- <command>` | Runs a command as a tracked job. Its exit code is the command's own. |
-| `ptrack list [--all] [--here] [--json]` | Running jobs plus recent ones. `--here`: only jobs started in this folder. |
+| `ptrack list [--all] [--here] [--project NAME] [--tag TAG] [--json]` | Running jobs plus recent ones. `--here`: only jobs started in this folder. `--project`, `--tag`: only those jobs. |
 | `ptrack status [ID] [--json]` | Everything about one job. No ID means the newest job. |
 | `ptrack tail [ID] [-n LINES] [-f]` | The job's output. `-f` keeps following it until the job ends. |
 | `ptrack wait [ID] [--timeout SECS] [-n LINES]` | Blocks until the job ends. Exits with its code, or 124 on timeout. |
@@ -220,7 +243,8 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other 
 | `ptrack notify webhook URL\|off`, `ptrack notify webhook-format json\|text` | Also POST each finished job to a web address. |
 
 Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
-`-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--agent`, `--session`.
+`-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--project NAME`,
+`--tag TAG`, `--agent`, `--session`.
 
 `ID` can be the first few characters of a job id, or `last`.
 

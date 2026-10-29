@@ -125,7 +125,7 @@ fn handle(mut stream: TcpStream, token: &str, hosts: &[String]) -> std::io::Resu
     match (req.method.as_str(), segments.as_slice()) {
         ("GET", ["jobs"]) => {
             let all = query_param(&req.query, "all").is_some_and(|v| v == "1");
-            let (jobs, total) = commands::visible_jobs(all, None);
+            let (jobs, total) = commands::visible_jobs(all, &commands::Filter::default());
             let body = json!({
                 "jobs": jobs.iter().map(commands::to_json).collect::<Vec<_>>(),
                 "total": total,

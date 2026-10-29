@@ -22,19 +22,39 @@ const RECENT_MAX: usize = 15;
 pub fn to_json(job: &Job) -> serde_json::Value {
     let mut shown = job.clone();
     shown.state = job.effective_state();
+    shown.project = job.project_name();
     let mut v = serde_json::to_value(&shown).unwrap_or_default();
     v["duration_ms"] = job.duration_ms().into();
     v
 }
 
-/// Jobs worth showing: all active ones plus recent finished ones (or all
-/// with `all`), optionally only those started under `cwd_prefix`.
-/// Also returns how many jobs matched before hiding old ones.
-pub fn visible_jobs(all: bool, cwd_prefix: Option<&str>) -> (Vec<Job>, usize) {
-    let mut jobs = job::list_all();
-    if let Some(prefix) = cwd_prefix {
-        jobs.retain(|j| j.cwd.starts_with(prefix));
+/// Which jobs to show. Project and tag match regardless of case.
+#[derive(Default)]
+pub struct Filter<'a> {
+    /// Only jobs started in this folder or below.
+    pub cwd_prefix: Option<&'a str>,
+    pub project: Option<&'a str>,
+    pub tag: Option<&'a str>,
+}
+
+impl Filter<'_> {
+    fn matches(&self, j: &Job) -> bool {
+        let same = |want: Option<&str>, have: Option<String>| match want {
+            None => true,
+            Some(w) => have.is_some_and(|h| h.to_lowercase() == w.to_lowercase()),
+        };
+        self.cwd_prefix.is_none_or(|p| j.cwd.starts_with(p))
+            && same(self.project, j.project_name())
+            && same(self.tag, j.tag.clone())
     }
+}
+
+/// Jobs worth showing: all active ones plus recent finished ones (or all
+/// with `all`), only those that match `filter`.
+/// Also returns how many jobs matched before hiding old ones.
+pub fn visible_jobs(all: bool, filter: &Filter) -> (Vec<Job>, usize) {
+    let mut jobs = job::list_all();
+    jobs.retain(|j| filter.matches(j));
     let total = jobs.len();
     if !all {
         let now = now_ms();
@@ -51,13 +71,24 @@ pub fn visible_jobs(all: bool, cwd_prefix: Option<&str>) -> (Vec<Job>, usize) {
     (jobs, total)
 }
 
-pub fn list(all: bool, here: bool, json: bool) -> CmdResult {
+pub fn list(
+    all: bool,
+    here: bool,
+    project: Option<&str>,
+    tag: Option<&str>,
+    json: bool,
+) -> CmdResult {
     let cwd = here.then(|| {
         std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_default()
     });
-    let (jobs, total) = visible_jobs(all, cwd.as_deref());
+    let filter = Filter {
+        cwd_prefix: cwd.as_deref(),
+        project,
+        tag,
+    };
+    let (jobs, total) = visible_jobs(all, &filter);
 
     if json {
         let out: Vec<_> = jobs.iter().map(to_json).collect();
@@ -75,8 +106,8 @@ pub fn list(all: bool, here: bool, json: bool) -> CmdResult {
 
     let now = now_ms();
     println!(
-        "{:<7} {:<10} {:>7} {:>9}  {:<12} {:<34} LAST LINE",
-        "ID", "STATE", "TIME", "STARTED", "AGENT", "WHAT"
+        "{:<7} {:<10} {:>7} {:>9}  {:<20} {:<12} {:<12} {:<30} LAST LINE",
+        "ID", "STATE", "TIME", "STARTED", "PROJECT", "TAG", "AGENT", "WHAT"
     );
     for j in &jobs {
         let agent = j
@@ -85,14 +116,16 @@ pub fn list(all: bool, here: bool, json: bool) -> CmdResult {
             .map(|a| a.split('_').next().unwrap_or(a))
             .unwrap_or("-");
         println!(
-            "{:<7} {:<10} {:>7} {:>9}  {:<12} {:<34} {}",
+            "{:<7} {:<10} {:>7} {:>9}  {:<20} {:<12} {:<12} {:<30} {}",
             j.id,
             j.effective_state().as_str(),
             fmt_duration(j.duration_ms()),
             format!("{} ago", fmt_duration(now.saturating_sub(j.started_ms))),
+            truncate(j.project_name().as_deref().unwrap_or("-"), 20),
+            truncate(j.tag.as_deref().unwrap_or("-"), 12),
             truncate(agent, 12),
-            truncate(&j.title(), 34),
-            truncate(j.last_line.as_deref().unwrap_or(""), 60),
+            truncate(&j.title(), 30),
+            truncate(j.last_line.as_deref().unwrap_or(""), 50),
         );
     }
     if jobs.len() < total {
@@ -131,6 +164,12 @@ pub fn status(id: Option<&str>, json: bool) -> CmdResult {
     }
     row("command", &j.command_line());
     row("cwd", &j.cwd);
+    if let Some(p) = &j.project_name() {
+        row("project", p);
+    }
+    if let Some(t) = &j.tag {
+        row("tag", t);
+    }
     if let Some(a) = &j.agent {
         row("agent", a);
     }
@@ -416,6 +455,8 @@ pub fn rerun_opts(j: &Job) -> Result<RunOpts, String> {
         command: j.command.clone(),
         cwd: Some(j.cwd.clone()),
         rerun_of: Some(j.id.clone()),
+        project: j.project.clone(),
+        tag: j.tag.clone(),
         ..RunOpts::default()
     })
 }

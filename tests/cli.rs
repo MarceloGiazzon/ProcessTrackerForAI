@@ -90,6 +90,89 @@ fn records_pass_and_fail_with_exit_codes() {
 }
 
 #[test]
+fn project_and_tag_are_recorded_listed_and_filtered() {
+    let h = Home::new("project");
+    let run_in = |dir: &std::path::Path, args: &[&str], env: &[(&str, &str)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ptrack"));
+        cmd.args(args).current_dir(dir).env("PTRACK_HOME", &h.0);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+    };
+
+    // Started deep inside a repository: the project is the repository's name.
+    let repo = h.0.join("NPDev");
+    let sub = repo.join("src").join("app");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(&sub).unwrap();
+    run_in(
+        &sub,
+        &["run", "-q", "--tag", "CI Watch", "-s", "--", "echo ok"],
+        &[],
+    );
+    // The option wins over the folder, and PTRACK_TAG sets a tag too.
+    run_in(
+        &h.0,
+        &["run", "-q", "--project", "Other", "-s", "--", "echo other"],
+        &[("PTRACK_TAG", "nightly")],
+    );
+
+    let all = h.json(&["list", "--json"]);
+    let all = all.as_array().unwrap();
+    assert_eq!(all[0]["project"], "Other");
+    assert_eq!(all[0]["tag"], "nightly");
+    assert_eq!(all[1]["project"], "NPDev");
+    assert_eq!(all[1]["tag"], "CI Watch");
+
+    let ids = |args: &[&str]| -> Vec<String> {
+        h.json(args)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|j| j["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let ci_job = all[1]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        ids(&["list", "--tag", "ci watch", "--json"]),
+        std::slice::from_ref(&ci_job)
+    );
+    assert_eq!(
+        ids(&["list", "--project", "npdev", "--json"]),
+        std::slice::from_ref(&ci_job)
+    );
+    assert!(ids(&["list", "--project", "nope", "--json"]).is_empty());
+
+    let table = String::from_utf8_lossy(&h.ptrack(&["list"]).stdout).to_string();
+    assert!(
+        table.contains("PROJECT") && table.contains("NPDev") && table.contains("CI Watch"),
+        "{table}"
+    );
+
+    // A rerun keeps both.
+    let out = h.ptrack(&["rerun", &ci_job, "-q"]);
+    assert!(out.status.success(), "{out:?}");
+    let again = h.json(&["status", "--json"]);
+    assert_eq!(again["rerun_of"], ci_job.as_str());
+    assert_eq!(again["project"], "NPDev");
+    assert_eq!(again["tag"], "CI Watch");
+}
+
+/// Windows exit codes can be negative (npm exits with -4058). ptrack's own
+/// exit code must still say "failed", not wrap or clamp to 0.
+#[cfg(windows)]
+#[test]
+fn a_negative_exit_code_still_fails() {
+    let h = Home::new("negative");
+    let out = h.ptrack(&["run", "-q", "-s", "--", "exit -4058"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert_eq!(h.state("last"), "failed");
+    assert_eq!(h.json(&["status", "--json"])["exit_code"], -4058);
+}
+
+#[test]
 fn missing_program_fails_cleanly() {
     let h = Home::new("missing");
     let out = h.ptrack(&["run", "-q", "--", "definitely-not-a-real-program-xyz"]);
@@ -172,6 +255,10 @@ fn mcp_server_lists_jobs_and_guards_control_tools() {
         "-q",
         "-l",
         "unit tests",
+        "--project",
+        "NPDev",
+        "--tag",
+        "CI Watch",
         "-s",
         "--",
         "echo 212 passed",
@@ -210,9 +297,11 @@ fn mcp_server_lists_jobs_and_guards_control_tools() {
             serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
             call(3, "jobs_list", serde_json::json!({})),
             call(4, "job_stop", serde_json::json!({"id":"last"})),
+            call(5, "jobs_list", serde_json::json!({"tag": "ci watch"})),
+            call(6, "jobs_list", serde_json::json!({"project": "elsewhere"})),
         ],
     );
-    assert_eq!(replies.len(), 4, "notifications get no reply: {replies:?}");
+    assert_eq!(replies.len(), 6, "notifications get no reply: {replies:?}");
     assert_eq!(replies[0]["result"]["serverInfo"]["name"], "ptrack");
     let tools: Vec<&str> = replies[1]["result"]["tools"]
         .as_array()
@@ -225,10 +314,19 @@ fn mcp_server_lists_jobs_and_guards_control_tools() {
     assert!(
         listing.contains("passed")
             && listing.contains("unit tests")
-            && listing.contains("212 passed"),
+            && listing.contains("212 passed")
+            && listing.contains("project=NPDev")
+            && listing.contains("tag=\"CI Watch\""),
         "{listing}"
     );
     assert_eq!(replies[3]["result"]["isError"], true);
+    let by_tag = replies[4]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(by_tag.contains("unit tests"), "{by_tag}");
+    let by_project = replies[5]["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        by_project.starts_with("no running or recent jobs"),
+        "{by_project}"
+    );
 
     let replies = session(
         true,

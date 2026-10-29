@@ -23,7 +23,8 @@ ptrack - see and control the long-running processes your AI agents start
 
 USAGE
   ptrack run [options] -- <command> [args...]   run a command as a tracked job
-  ptrack list [--all] [--here] [--json]         what is running, and what ran recently
+  ptrack list [--all] [--here] [--project NAME] [--tag TAG] [--json]
+                                                what is running, and what ran recently
   ptrack status [ID] [--json]                   details of one job (default: newest)
   ptrack tail [ID] [-n LINES] [-f]              show the job's output (-f: follow)
   ptrack wait [ID] [--timeout SECS] [-n LINES]  block until the job ends; exits with its code
@@ -47,6 +48,9 @@ RUN OPTIONS
   -d, --detach        run in the background and return immediately (prints the job id)
   -q, --quiet         don't echo output; print one summary line (+ last lines on failure)
   -s, --shell         run the command line through the system shell (cmd.exe or sh)
+      --project NAME  the project it belongs to (default: the git repository's folder
+                      name, else the current folder's name; or PTRACK_PROJECT)
+      --tag TAG       a free-form tag to group jobs, e.g. 'CI Watch' (or PTRACK_TAG)
       --agent NAME    who started it (default: detected from AI_AGENT / CLAUDECODE)
       --session ID    agent session (default: detected from CLAUDE_CODE_SESSION_ID)
 
@@ -66,7 +70,10 @@ fn main() -> ExitCode {
             2
         }
     };
-    ExitCode::from(code.clamp(0, 255) as u8)
+    // Windows exit codes can be negative (npm exits with -4058). Clamping
+    // would turn those into 0, i.e. success, so any negative code becomes 1.
+    let code = if code < 0 { 1 } else { code.min(255) };
+    ExitCode::from(code as u8)
 }
 
 fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
@@ -79,16 +86,19 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
         "list" | "ls" => {
             let mut p = Parser::new(args);
             let (mut all, mut here, mut json) = (false, false, false);
+            let (mut project, mut tag) = (None, None);
             while let Some(a) = p.next_flag()? {
                 match a.as_str() {
                     "--all" | "-a" => all = true,
                     "--here" => here = true,
                     "--json" => json = true,
+                    "--project" => project = Some(p.value(&a)?),
+                    "--tag" => tag = Some(p.value(&a)?),
                     _ => return Err(unknown(&a)),
                 }
             }
             p.no_more()?;
-            commands::list(all, here, json)
+            commands::list(all, here, project.as_deref(), tag.as_deref(), json)
         }
         "status" => {
             let mut p = Parser::new(args);
@@ -266,6 +276,8 @@ fn parse_run(args: VecDeque<String>) -> Result<RunOpts, String> {
             "-s" | "--shell" => opts.shell = true,
             "--agent" => opts.agent = Some(p.value(&a)?),
             "--session" => opts.session = Some(p.value(&a)?),
+            "--project" => opts.project = Some(p.value(&a)?),
+            "--tag" => opts.tag = Some(p.value(&a)?),
             "--prompt-id" => opts.prompt_id = Some(p.value(&a)?),
             "--cwd" => opts.cwd = Some(p.value(&a)?),
             "--rerun-of" => opts.rerun_of = Some(p.value(&a)?),

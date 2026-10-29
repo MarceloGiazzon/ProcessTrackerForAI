@@ -69,6 +69,13 @@ pub struct Job {
     /// Set when this job was started by `ptrack rerun` of another job.
     #[serde(default)]
     pub rerun_of: Option<String>,
+    /// Which project the job belongs to, e.g. `NPDev`. Set at start: from
+    /// `--project`, `PTRACK_PROJECT`, or the folder (see `project_for`).
+    #[serde(default)]
+    pub project: Option<String>,
+    /// A free-form tag to group jobs, e.g. `CI Watch`.
+    #[serde(default)]
+    pub tag: Option<String>,
     pub state: State,
     pub exit_code: Option<i32>,
     pub started_at: String,
@@ -105,6 +112,22 @@ pub fn home() -> PathBuf {
         }
     }
     std::env::temp_dir().join("ptrack")
+}
+
+/// The project a folder belongs to: the name of the nearest folder (itself or
+/// above) that holds a `.git`, so jobs started in `NPDev/src/app` count as
+/// `NPDev`. Without a repository, the folder's own name.
+pub fn project_for(cwd: &str) -> Option<String> {
+    let dir = Path::new(cwd);
+    let root = dir
+        .ancestors()
+        .find(|d| d.join(".git").exists())
+        .unwrap_or(dir);
+    folder_name(root)
+}
+
+fn folder_name(dir: &Path) -> Option<String> {
+    dir.file_name().map(|n| n.to_string_lossy().into_owned())
 }
 
 pub fn jobs_dir() -> PathBuf {
@@ -175,6 +198,8 @@ impl Job {
             prompt_id: None,
             prompt: None,
             rerun_of: None,
+            project: None,
+            tag: None,
             state: State::Running,
             exit_code: None,
             started_at: iso_utc(now),
@@ -253,6 +278,14 @@ impl Job {
             Some(l) => l.clone(),
             None => self.command_line(),
         }
+    }
+
+    /// The job's project. Job files from before projects existed fall back
+    /// to the name of the folder the job ran in.
+    pub fn project_name(&self) -> Option<String> {
+        self.project
+            .clone()
+            .or_else(|| folder_name(Path::new(&self.cwd)))
     }
 
     pub fn command_line(&self) -> String {

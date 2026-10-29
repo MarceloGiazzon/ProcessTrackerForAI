@@ -28,6 +28,8 @@ pub struct RunOpts {
     pub cwd: Option<String>,
     /// Id of the job this one repeats (`ptrack rerun`).
     pub rerun_of: Option<String>,
+    pub project: Option<String>,
+    pub tag: Option<String>,
     pub shell: bool,
     pub detach: bool,
     pub quiet: bool,
@@ -79,6 +81,8 @@ pub fn start_detached(opts: &RunOpts) -> Result<Detached, String> {
         ("--prompt-id", &opts.prompt_id),
         ("--cwd", &opts.cwd),
         ("--rerun-of", &opts.rerun_of),
+        ("--project", &opts.project),
+        ("--tag", &opts.tag),
     ] {
         if let Some(v) = value {
             args.push(flag.into());
@@ -152,6 +156,19 @@ fn detect_agent(opts: &RunOpts) -> (Option<String>, Option<String>) {
     (agent, session)
 }
 
+/// Project and tag: the option, else the environment variable, else (for the
+/// project only) the name worked out from the folder.
+fn detect_project_and_tag(opts: &RunOpts, cwd: &str) -> (Option<String>, Option<String>) {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let project = opts
+        .project
+        .clone()
+        .or_else(|| env("PTRACK_PROJECT"))
+        .or_else(|| job::project_for(cwd));
+    let tag = opts.tag.clone().or_else(|| env("PTRACK_TAG"));
+    (project, tag)
+}
+
 fn supervise(opts: RunOpts) -> i32 {
     platform::install_interrupt_handler();
     let id = opts.job_id.clone().unwrap_or_else(job::fresh_id);
@@ -164,6 +181,7 @@ fn supervise(opts: RunOpts) -> i32 {
     if let Some(dir) = &opts.cwd {
         job.cwd = dir.clone();
     }
+    (job.project, job.tag) = detect_project_and_tag(&opts, &job.cwd);
     let echo = !opts.background && !opts.quiet;
     let speak = !opts.background;
 

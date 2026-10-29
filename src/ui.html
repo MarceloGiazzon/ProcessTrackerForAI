@@ -52,6 +52,11 @@
     background: color-mix(in srgb, var(--state) 14%, transparent);
   }
   .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .project { font-weight: 600; color: var(--text); }
+  .tag {
+    display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 7px; margin-right: 6px;
+    border-radius: 5px; border: 1px solid var(--line); color: var(--muted); vertical-align: 1px;
+  }
   .meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .last {
     grid-column: 2 / 4; color: var(--muted); font: 12.5px/1.4 ui-monospace, Consolas, monospace;
@@ -169,13 +174,13 @@ function title(j) {
 function renderJob(j) {
   const active = j.state === "running" || j.state === "paused";
   const meta = el("div", { class: "meta" },
+    j.project ? el("span", { class: "project", title: j.cwd }, j.project) : null,
     el("span", {}, "#" + j.id),
     el("span", {}, ({ running: "running for ", paused: "up for " }[j.state] || "took ") + dur(j.duration_ms)),
     el("span", {}, "started " + dur(Date.now() - j.started_ms) + " ago"),
     j.agent ? el("span", {}, "by " + j.agent.split("_")[0]) : null,
     j.exit_code != null ? el("span", {}, "exit " + j.exit_code) : null,
     j.rerun_of ? el("span", {}, "rerun of #" + j.rerun_of) : null,
-    el("span", { title: j.cwd }, j.cwd.split(/[\\/]/).filter(Boolean).pop() || j.cwd),
   );
   const actions = el("div", { class: "actions" });
   if (j.state === "running") {
@@ -196,7 +201,7 @@ function renderJob(j) {
   };
   const row = el("div", { class: "row", onclick: toggle },
     el("span", { class: "badge", style: "--state: var(--" + j.state + ")" }, j.state),
-    el("div", { class: "info" }, el("div", { class: "title", title: title(j) }, title(j)), meta),
+    el("div", { class: "info" }, el("div", { class: "title", title: title(j) }, j.tag ? el("span", { class: "tag" }, j.tag) : null, title(j)), meta),
     actions,
     j.last_line ? el("div", { class: "last", title: j.last_line }, j.last_line) : null,
   );

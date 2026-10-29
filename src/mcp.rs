@@ -97,16 +97,18 @@ fn tool_list(allow_control: bool) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "jobs_list",
-            "description": "List running jobs and recently finished ones, one line each: id, state, duration, label or command, agent, last output line.",
+            "description": "List running jobs and recently finished ones, one line each: id, state, duration, label or command, project, tag, agent, last output line.",
             "inputSchema": { "type": "object", "properties": {
                 "all": { "type": "boolean", "description": "Include old finished jobs too." },
-                "cwd": { "type": "string", "description": "Only jobs started in this folder or below." }
+                "cwd": { "type": "string", "description": "Only jobs started in this folder or below." },
+                "project": { "type": "string", "description": "Only jobs of this project (e.g. the repository folder name); case-insensitive." },
+                "tag": { "type": "string", "description": "Only jobs with this tag (e.g. 'CI Watch'); case-insensitive." }
             }},
             "annotations": { "readOnlyHint": true }
         }),
         json!({
             "name": "job_status",
-            "description": "Full record of one job: state, exit code, command, folder, timings, agent, log path, last output line.",
+            "description": "Full record of one job: state, exit code, command, folder, project, tag, timings, agent, log path, last output line.",
             "inputSchema": { "type": "object", "properties": { "id": id_param() }, "required": ["id"] },
             "annotations": { "readOnlyHint": true }
         }),
@@ -174,10 +176,13 @@ fn call_tool(name: &str, args: &Value, allow_control: bool) -> Result<String, St
     };
     match name {
         "jobs_list" => {
-            let (jobs, total) = commands::visible_jobs(
-                args["all"].as_bool().unwrap_or(false),
-                args["cwd"].as_str(),
-            );
+            let filter = commands::Filter {
+                cwd_prefix: args["cwd"].as_str(),
+                project: args["project"].as_str(),
+                tag: args["tag"].as_str(),
+            };
+            let (jobs, total) =
+                commands::visible_jobs(args["all"].as_bool().unwrap_or(false), &filter);
             if jobs.is_empty() {
                 return Ok(format!("no running or recent jobs ({total} older)"));
             }
@@ -273,6 +278,12 @@ fn one_line(j: &Job) -> String {
     );
     if let Some(code) = j.exit_code {
         s.push_str(&format!(" exit={code}"));
+    }
+    if let Some(p) = j.project_name() {
+        s.push_str(&format!(" project={p}"));
+    }
+    if let Some(t) = &j.tag {
+        s.push_str(&format!(" tag=\"{t}\""));
     }
     if let Some(a) = &j.agent {
         s.push_str(&format!(" [{}]", a.split('_').next().unwrap_or(a)));
