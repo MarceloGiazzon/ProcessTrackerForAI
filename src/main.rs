@@ -40,6 +40,8 @@ USAGE
   ptrack hook uninstall [--project]             remove that hook again
   ptrack notify [on|off|min-seconds N|test]     desktop notification when a job ends
                                                 (off by default; only jobs >= 30 s)
+  ptrack instructions                           print the text that tells an AI agent to use ptrack
+                                                (append it to AGENTS.md, CLAUDE.md, GEMINI.md, ...)
   ptrack notify webhook URL|off                 also POST each finished job to URL
   ptrack notify webhook-format json|text        JSON (Slack, Discord, scripts) or plain text
 
@@ -99,6 +101,11 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
             }
             p.no_more()?;
             commands::list(all, here, project.as_deref(), tag.as_deref(), json)
+        }
+        "instructions" => {
+            Parser::new(args).no_more()?;
+            print!("{}", commands::AGENT_INSTRUCTIONS);
+            Ok(0)
         }
         "status" => {
             let mut p = Parser::new(args);

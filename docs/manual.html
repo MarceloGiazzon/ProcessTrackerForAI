@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual do ptrack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: sticky table of contents on the left, one reading column on the right; stacks on phones. */
+:root {
+  --bg: #f6f7f5;
+  --surface: #ffffff;
+  --fg: #1d2421;
+  --muted: #5b6862;
+  --line: #dde2de;
+  --accent: #1f6f5c;
+  --accent-soft: #e2efe9;
+  --code-bg: #eef1ee;
+  --tip-bg: #eef5f1;
+  --warn-bg: #fbf3e4;
+  --warn-line: #c98a1b;
+  --s-running: #2563c9;
+  --s-paused: #b7791f;
+  --s-passed: #2f8a4b;
+  --s-failed: #c23b32;
+  --s-cancelled: #6b7280;
+  --s-lost: #8a4bc2;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131816; --surface: #1a201e; --fg: #e3e8e5; --muted: #9aa8a1; --line: #2c3532;
+    --accent: #6cc4a8; --accent-soft: #1f3330; --code-bg: #202826; --tip-bg: #1a2a25;
+    --warn-bg: #2b2418; --warn-line: #d9a441;
+    --s-running: #6a9cf0; --s-paused: #e0a94a; --s-passed: #5cc27a; --s-failed: #ee7a70;
+    --s-cancelled: #a2a9b4; --s-lost: #b98be6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131816; --surface: #1a201e; --fg: #e3e8e5; --muted: #9aa8a1; --line: #2c3532;
+  --accent: #6cc4a8; --accent-soft: #1f3330; --code-bg: #202826; --tip-bg: #1a2a25;
+  --warn-bg: #2b2418; --warn-line: #d9a441;
+  --s-running: #6a9cf0; --s-paused: #e0a94a; --s-passed: #5cc27a; --s-failed: #ee7a70;
+  --s-cancelled: #a2a9b4; --s-lost: #b98be6;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 17px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 48px; padding-block: 32px 80px; }
+@media (max-width: 860px) { .wrap { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+/* Sidebar */
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; max-height: calc(100vh - 48px); overflow-y: auto; font-size: 15px; }
+@media (max-width: 860px) { nav.toc { position: static; max-height: none; } }
+.brand { display: flex; align-items: baseline; gap: 8px; margin-bottom: 16px; }
+.brand b { font-family: var(--font-mono); font-size: 22px; color: var(--accent); }
+.brand span { color: var(--muted); font-size: 14px; }
+#q { width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg); font: inherit; font-size: 15px; }
+#q:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.toc ol { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 2px; counter-reset: c; }
+.toc li a { display: flex; gap: 10px; padding: 5px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; }
+.toc li a::before { counter-increment: c; content: counter(c); font-family: var(--font-mono); font-size: 12px; min-width: 18px; padding-top: 3px; opacity: .7; }
+.toc li a:hover { color: var(--fg); background: var(--accent-soft); }
+.toc li a.active { color: var(--accent); background: var(--accent-soft); font-weight: 700; }
+.toc li a:focus-visible { outline: 2px solid var(--accent); }
+.noresult { color: var(--muted); font-size: 14px; margin-top: 12px; }
+
+/* Content */
+main { min-width: 0; max-width: 72ch; }
+header.hero { padding-bottom: 24px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+header.hero h1 { font-size: clamp(30px, 5vw, 42px); line-height: 1.15; margin: 0 0 12px; text-wrap: balance; }
+header.hero p { color: var(--muted); font-size: 19px; margin: 0; }
+section { padding-top: 40px; scroll-margin-top: 16px; }
+h2 { font-size: 27px; line-height: 1.25; margin: 0 0 12px; text-wrap: balance; }
+h3 { font-size: 20px; margin: 28px 0 8px; }
+p, ul, ol { margin: 0 0 14px; }
+li { margin-bottom: 6px; }
+a { color: var(--accent); }
+strong { font-weight: 700; }
+.lead { font-size: 18px; }
+
+code { font-family: var(--font-mono); font-size: .86em; background: var(--code-bg); padding: 1px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+.cmd { position: relative; margin: 0 0 16px; }
+.cmd pre { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 14px 76px 14px 16px; overflow-x: auto; font-family: var(--font-mono); font-size: 14px; line-height: 1.55; }
+.cmd pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+.cmd .c { color: var(--muted); }
+.copy { position: absolute; top: 8px; right: 8px; font: 600 12px var(--font-body); padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+.copy:hover { border-color: var(--accent); color: var(--accent); }
+.copy:focus-visible { outline: 2px solid var(--accent); }
+
+.note { border-radius: 8px; padding: 12px 16px; margin: 0 0 16px; background: var(--tip-bg); border-left: 4px solid var(--accent); }
+.note.warn { background: var(--warn-bg); border-left-color: var(--warn-line); }
+.note > :last-child { margin-bottom: 0; }
+.note b.t { display: block; margin-bottom: 2px; }
+
+.tablebox { overflow-x: auto; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; background: var(--surface); }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+th { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--code-bg); }
+td code { white-space: nowrap; }
+
+.state { display: inline-block; font: 600 13px var(--font-mono); padding: 2px 9px; border-radius: 999px; border: 1.5px solid currentColor; white-space: nowrap; }
+.st-running { color: var(--s-running); } .st-paused { color: var(--s-paused); } .st-passed { color: var(--s-passed); }
+.st-failed { color: var(--s-failed); } .st-cancelled { color: var(--s-cancelled); } .st-lost { color: var(--s-lost); }
+
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.tabs button { font: inherit; font-size: 15px; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
+.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps > li { position: relative; padding-left: 40px; margin-bottom: 18px; }
+.steps > li::before { counter-increment: s; content: counter(s); position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font: 700 14px var(--font-mono); display: grid; place-items: center; }
+
+dl.gloss { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 20px; }
+dl.gloss dt { font-weight: 700; }
+dl.gloss dd { margin: 0; }
+@media (max-width: 560px) { dl.gloss { grid-template-columns: minmax(0, 1fr); } dl.gloss dd { margin-bottom: 8px; } }
+
+.toast { position: fixed; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 8px; font-size: 14px; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="toc" aria-label="Sumário">
+    <div class="brand"><b>ptrack</b><span>manual v0.5</span></div>
+    <input id="q" type="search" placeholder="Buscar no manual…" aria-label="Buscar no manual" autocomplete="off">
+    <ol id="toc"></ol>
+    <p class="noresult" id="noresult" hidden>Nada encontrado. Tente outra palavra.</p>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <h1>Manual do ptrack</h1>
+      <p>Como ver e controlar os programas demorados que você ou o seu agente de IA deixam rodando no computador. Escrito para quem não é especialista.</p>
+    </header>
+
+    <section id="o-que-e" data-title="O que é o ptrack">
+      <h2>O que é o ptrack</h2>
+      <p class="lead">O ptrack é um pequeno programa de linha de comando que funciona como uma <strong>torre de controle</strong> para tarefas demoradas: compilações, testes, servidores, downloads, instalações.</p>
+      <p>Hoje é comum pedir a um agente de IA (Claude Code, Codex, Cursor, Gemini CLI, Aider…) que rode um comando que leva vários minutos. Depois surgem as dúvidas: ainda está rodando? Travou? Terminou bem? Quem iniciou isso? Sem uma ferramenta, o agente precisa ler logs enormes para responder, e isso gasta tempo e dinheiro (tokens).</p>
+      <p>Com o ptrack, cada comando vira um <strong>job</strong> (uma tarefa registrada). Você vê todos numa lista, sem gastar nada, e pode <strong>parar</strong>, <strong>pausar</strong>, <strong>retomar</strong> ou <strong>rodar de novo</strong> qualquer um deles.</p>
+      <h3>O que ele promete</h3>
+      <ul>
+        <li><strong>Um único arquivo, nada para instalar.</strong> Menos de 1 MB. Não precisa de banco de dados nem de serviço rodando em segundo plano.</li>
+        <li><strong>Funciona no Windows, Linux e macOS</strong>, com o mesmo cuidado nos três.</li>
+        <li><strong>Funciona com qualquer agente</strong> e com qualquer projeto. Também serve para você, sem agente nenhum.</li>
+        <li><strong>Estados honestos.</strong> Se algo deu errado sem aviso, ele mostra isso. Nunca diz que algo “passou” quando não sabe.</li>
+        <li><strong>Para tudo de uma vez.</strong> Ao parar um job, ele para também todos os programas que esse job abriu.</li>
+        <li><strong>Só no seu computador.</strong> Sem conta, sem internet, sem coleta de dados. (A única exceção é o webhook, que só funciona se você mesmo configurar.)</li>
+      </ul>
+    </section>
+
+    <section id="conceitos" data-title="Conceitos básicos">
+      <h2>Conceitos básicos</h2>
+      <p>Cinco ideias bastam para usar o ptrack com segurança.</p>
+      <h3>Terminal</h3>
+      <p>É a janela onde se digitam comandos. No Windows, abra o <strong>PowerShell</strong> (procure “PowerShell” no menu Iniciar). No macOS, abra o app <strong>Terminal</strong>. No Linux, o terminal do seu sistema. Todos os comandos deste manual são digitados ali, seguidos de Enter.</p>
+      <h3>Job</h3>
+      <p>Um job é um comando que o ptrack está acompanhando. Cada job tem:</p>
+      <ul>
+        <li>um <strong>ID</strong>, um código curto de 6 letras e números, como <code>k3f9a2</code>;</li>
+        <li>um <strong>nome</strong> opcional (rótulo), como “build completo”;</li>
+        <li>a pasta onde rodou, quem iniciou (você ou qual agente), quando começou e quanto tempo levou;</li>
+        <li>a <strong>saída</strong> do comando (tudo o que ele escreveu na tela), guardada num arquivo de log.</li>
+      </ul>
+      <p>Não é preciso digitar o ID inteiro: as primeiras letras bastam, desde que não haja outro job começando igual. A palavra <code>last</code> significa “o job mais recente”.</p>
+      <h3>Estados de um job</h3>
+      <div class="tablebox"><table>
+        <thead><tr><th>Estado</th><th>O que significa</th></tr></thead>
+        <tbody>
+          <tr><td><span class="state st-running">running</span></td><td>Está rodando agora.</td></tr>
+          <tr><td><span class="state st-paused">paused</span></td><td>Foi congelado. Não usa processador, mas continua na memória e pode ser retomado.</td></tr>
+          <tr><td><span class="state st-passed">passed</span></td><td>Terminou com sucesso (código de saída 0).</td></tr>
+          <tr><td><span class="state st-failed">failed</span></td><td>Terminou com erro (código de saída diferente de 0).</td></tr>
+          <tr><td><span class="state st-cancelled">cancelled</span></td><td>Alguém parou o job de propósito, com <code>ptrack stop</code> ou pelo painel.</td></tr>
+          <tr><td><span class="state st-lost">lost</span></td><td>Perdido. O ptrack que vigiava o job sumiu sem avisar (o computador desligou, a janela foi fechada à força…). O resultado real é desconhecido, por isso ele não finge que passou.</td></tr>
+        </tbody>
+      </table></div>
+      <h3>Código de saída</h3>
+      <p>Todo programa, ao terminar, devolve um número: <code>0</code> quer dizer “deu certo” e qualquer outro número quer dizer “deu errado”. O ptrack guarda esse número e devolve o mesmo, para que scripts e agentes saibam o resultado.</p>
+      <h3>Supervisor</h3>
+      <p>Quando você roda um comando pelo ptrack, uma cópia do ptrack fica “de babá” daquele comando: guarda a saída, anota a cada 2 segundos que o job continua vivo e registra o resultado no final. Esse vigia é o <strong>supervisor</strong>. Se ele parar de dar sinal por mais de 10 segundos e não existir mais, o job aparece como <span class="state st-lost">lost</span>.</p>
+    </section>
+
+    <section id="instalar" data-title="Instalação">
+      <h2>Instalação</h2>
+      <p>Escolha o seu sistema, copie a linha e cole no terminal.</p>
+      <div class="tabs" role="tablist" aria-label="Sistema operacional">
+        <button role="tab" id="tab-win" aria-selected="true" aria-controls="p-win">Windows</button>
+        <button role="tab" id="tab-unix" aria-selected="false" aria-controls="p-unix">macOS e Linux</button>
+      </div>
+      <div id="p-win" role="tabpanel" aria-labelledby="tab-win">
+        <p>Abra o <strong>PowerShell</strong> e rode:</p>
+        <div class="cmd"><pre><code>irm https://raw.githubusercontent.com/MarceloGiazzon/ProcessTrackerForAI/main/install.ps1 | iex</code></pre></div>
+        <p>O programa vai para <code>%LOCALAPPDATA%\Programs\ptrack</code> e essa pasta é adicionada ao PATH, a lista de pastas onde o sistema procura comandos. <strong>Feche e abra o terminal de novo</strong> depois de instalar.</p>
+      </div>
+      <div id="p-unix" role="tabpanel" aria-labelledby="tab-unix" hidden>
+        <p>Abra o <strong>Terminal</strong> e rode:</p>
+        <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/MarceloGiazzon/ProcessTrackerForAI/main/install.sh | sh</code></pre></div>
+        <p>O programa vai para <code>~/.local/bin</code>. Se essa pasta ainda não estiver no PATH, o instalador mostra a linha exata que você precisa adicionar.</p>
+      </div>
+      <h3>Conferir se funcionou</h3>
+      <div class="cmd"><pre><code>ptrack version</code></pre></div>
+      <p>Se aparecer um número de versão, está tudo certo. Se aparecer “comando não encontrado”, veja <a href="#problemas">Solução de problemas</a>.</p>
+      <h3>Atualizar</h3>
+      <p>Rode o mesmo comando de instalação de novo. Ele baixa a versão mais recente e confere a integridade do arquivo (checksum) antes de instalar.</p>
+      <div class="note"><b class="t">Outras formas</b><p>Você também pode baixar o arquivo do seu sistema na página <em>Releases</em> do projeto no GitHub, ou compilar a partir do código com <code>cargo install --path .</code> se tiver Rust instalado.</p></div>
+    </section>
+
+    <section id="primeiros-passos" data-title="Primeiros passos">
+      <h2>Primeiros passos</h2>
+      <p>Um passeio de cinco minutos. Os exemplos usam <code>npm test</code> e <code>gradle build</code>, mas vale qualquer comando que você já usa.</p>
+      <div class="note warn"><b class="t">Antes de começar: entre na pasta do projeto</b><p>O ptrack roda o comando exatamente como você rodaria sem ele. Por isso, <code>npm test</code> só funciona dentro da pasta do projeto (a que tem o arquivo <code>package.json</code>), e <code>gradle build</code> só funciona se o Gradle estiver instalado. Se o comando falharia sem o ptrack, também falha com ele. Primeiro vá para a pasta do projeto, por exemplo:</p>
+        <div class="cmd"><pre><code>cd C:\Projetos\NPDev</code></pre></div>
+        <p>Para um teste que funciona em qualquer pasta, use <code>ptrack run -s -- "echo olá"</code>.</p></div>
+      <ol class="steps">
+        <li>
+          <p><strong>Rode um comando pelo ptrack.</strong> Basta colocar <code>ptrack run --</code> na frente. A saída aparece na tela normalmente.</p>
+          <div class="cmd"><pre><code>ptrack run -- npm test</code></pre></div>
+          <p>Os dois tracinhos <code>--</code> separam as opções do ptrack do comando que você quer rodar.</p>
+        </li>
+        <li>
+          <p><strong>Rode algo demorado em segundo plano</strong> e receba o terminal de volta na hora:</p>
+          <div class="cmd"><pre><code>ptrack run -d -l "build completo" -- gradle build</code></pre></div>
+          <p>Ele responde algo como <code>job k3f9a2 started in background</code>. Anote o ID.</p>
+        </li>
+        <li>
+          <p><strong>Veja o que está rodando:</strong></p>
+          <div class="cmd"><pre><code>ptrack list</code></pre></div>
+          <div class="cmd"><pre><code>ID      STATE       TIME   STARTED   PROJECT   TAG       AGENT        WHAT            LAST LINE
+k3f9a2  running    3m04s  3m04s ago NPDev     CI Watch  claude-code  build completo  &gt; Task :app:compileJava
+x9ewes  passed       41s    12m ago NPDev     -         claude-code  npm test        Tests: 212 passed
+cexj44  failed        2s     1h ago website   -         -            ./deploy.sh     error: missing API_URL</code></pre></div>
+          <p>A coluna PROJECT mostra a qual projeto o job pertence e TAG mostra a etiqueta, se houver (veja <a href="#projetos">Projetos e etiquetas</a>). A última coluna mostra a última linha que cada job escreveu, o que muitas vezes já basta para saber como ele está.</p>
+        </li>
+        <li>
+          <p><strong>Acompanhe a saída ao vivo</strong> (Ctrl+C para sair da visualização; o job continua rodando):</p>
+          <div class="cmd"><pre><code>ptrack tail k3f9a2 -f</code></pre></div>
+        </li>
+        <li>
+          <p><strong>Pare o job</strong>, junto com tudo o que ele abriu:</p>
+          <div class="cmd"><pre><code>ptrack stop k3f9a2</code></pre></div>
+        </li>
+        <li>
+          <p><strong>Abra o painel no navegador</strong> para ver tudo com botões:</p>
+          <div class="cmd"><pre><code>ptrack ui</code></pre></div>
+        </li>
+      </ol>
+    </section>
+
+    <section id="comandos" data-title="Comandos do dia a dia">
+      <h2>Comandos do dia a dia</h2>
+      <p>Em todos os comandos, <code>ID</code> pode ser só o começo do código do job, ou <code>last</code> para o mais recente.</p>
+
+      <h3>ptrack run: rodar um comando como job</h3>
+      <div class="cmd"><pre><code>ptrack run [opções] -- &lt;comando&gt;</code></pre></div>
+      <div class="tablebox"><table>
+        <thead><tr><th>Opção</th><th>Para que serve</th></tr></thead>
+        <tbody>
+          <tr><td><code>-l "texto"</code></td><td>Dá um nome legível ao job, como “testes de integração”.</td></tr>
+          <tr><td><code>-d</code></td><td>Roda em segundo plano e devolve o terminal imediatamente.</td></tr>
+          <tr><td><code>-q</code></td><td>Modo silencioso: não mostra a saída, só uma linha de resumo no final (e as últimas linhas se falhar).</td></tr>
+          <tr><td><code>-s</code></td><td>Passa o comando pelo shell do sistema. Necessário para usar <code>&amp;&amp;</code>, <code>|</code> (pipe) e afins.</td></tr>
+          <tr><td><code>--project NOME</code></td><td>Diz a qual projeto o job pertence. Normalmente é descoberto sozinho.</td></tr>
+          <tr><td><code>--tag "texto"</code></td><td>Coloca uma etiqueta no job, como “CI Watch”.</td></tr>
+          <tr><td><code>--agent NOME</code></td><td>Diz quem iniciou o job. Normalmente é detectado sozinho.</td></tr>
+          <tr><td><code>--session ID</code></td><td>Identifica a sessão do agente. Normalmente é detectado sozinho.</td></tr>
+        </tbody>
+      </table></div>
+      <p>Exemplo com o shell, para encadear dois comandos:</p>
+      <div class="cmd"><pre><code>ptrack run -s -l "instalar e testar" -- "npm install &amp;&amp; npm test"</code></pre></div>
+      <div class="note"><b class="t">Sem teclado</b><p>Jobs não recebem o que você digita. Um comando que faz perguntas (“Deseja continuar? s/n”) recebe “fim de entrada” em vez de ficar esperando para sempre. Use as opções do próprio programa para responder sim automaticamente, como <code>-y</code> ou <code>--yes</code>.</p></div>
+
+      <h3>ptrack list: o que está rodando e o que rodou</h3>
+      <div class="cmd"><pre><code>ptrack list           <span class="c"># jobs ativos e recentes</span>
+ptrack list --all     <span class="c"># inclui os antigos</span>
+ptrack list --here    <span class="c"># só os iniciados nesta pasta</span>
+ptrack list --project NPDev        <span class="c"># só os deste projeto</span>
+ptrack list --tag "CI Watch"       <span class="c"># só os com esta etiqueta</span></code></pre></div>
+
+      <h3>ptrack status: tudo sobre um job</h3>
+      <div class="cmd"><pre><code>ptrack status k3f9a2</code></pre></div>
+      <p>Sem ID, mostra o job mais recente. Mostra o comando, a pasta, os horários, o estado, o código de saída e a última linha.</p>
+
+      <h3>ptrack tail: ver a saída</h3>
+      <div class="cmd"><pre><code>ptrack tail k3f9a2          <span class="c"># últimas linhas</span>
+ptrack tail k3f9a2 -n 100   <span class="c"># últimas 100 linhas</span>
+ptrack tail k3f9a2 -f       <span class="c"># continua mostrando até o job acabar</span></code></pre></div>
+
+      <h3>ptrack wait: esperar terminar</h3>
+      <div class="cmd"><pre><code>ptrack wait k3f9a2 --timeout 600</code></pre></div>
+      <p>Fica esperando até o job acabar e sai com o mesmo código de saída do job. Se o tempo limite (em segundos) passar antes, sai com o código <code>124</code>. Se o job falhar, mostra as últimas 20 linhas para você ver o erro.</p>
+
+      <h3>ptrack stop: parar</h3>
+      <div class="cmd"><pre><code>ptrack stop k3f9a2              <span class="c"># pede com educação, força depois de 5 s</span>
+ptrack stop k3f9a2 --grace 30   <span class="c"># espera até 30 s antes de forçar</span>
+ptrack stop k3f9a2 --force      <span class="c"># encerra na hora</span></code></pre></div>
+      <p>Primeiro o ptrack pede ao programa que encerre (assim ele pode salvar o que precisa). Se o programa não sair dentro do tempo de espera, o ptrack encerra à força ele e todos os programas que ele abriu.</p>
+
+      <h3>ptrack pause / resume: congelar e descongelar</h3>
+      <div class="cmd"><pre><code>ptrack pause k3f9a2
+ptrack resume k3f9a2</code></pre></div>
+      <div class="note warn"><b class="t">Pausar nem sempre é seguro</b><p>Enquanto está congelado, conexões de rede e temporizadores podem expirar. Servidores e ferramentas Java (Gradle, Maven) às vezes não voltam bem. Para esses, prefira parar e rodar de novo.</p></div>
+
+      <h3>ptrack rerun: rodar de novo</h3>
+      <div class="cmd"><pre><code>ptrack rerun k3f9a2        <span class="c"># na frente, como run</span>
+ptrack rerun k3f9a2 -d     <span class="c"># em segundo plano</span></code></pre></div>
+      <p>Repete o mesmo comando, na mesma pasta, como um job novo ligado ao antigo. Só funciona com jobs que já terminaram, porque duas cópias do mesmo build ou servidor na mesma pasta costumam brigar entre si.</p>
+
+      <h3>ptrack prune: faxina</h3>
+      <div class="cmd"><pre><code>ptrack prune             <span class="c"># apaga jobs terminados há mais de 7 dias</span>
+ptrack prune --days 1    <span class="c"># há mais de 1 dia</span>
+ptrack prune --all       <span class="c"># todos os terminados</span></code></pre></div>
+      <p>Apaga o registro e o log dos jobs que já terminaram. Jobs que ainda estão rodando nunca são apagados.</p>
+    </section>
+
+    <section id="projetos" data-title="Projetos e etiquetas">
+      <h2>Projetos e etiquetas</h2>
+      <p>Quando você trabalha em vários projetos ao mesmo tempo, a lista mistura jobs de todos eles. Projetos e etiquetas ajudam a separar.</p>
+      <h3>Projeto</h3>
+      <p>Todo job pertence a um <strong>projeto</strong>, mostrado na coluna PROJECT. O ptrack descobre o nome sozinho:</p>
+      <ul>
+        <li>se o comando rodou dentro de um repositório git, o projeto é o nome da pasta do repositório. Um job iniciado em <code>NPDev\src\app</code> pertence a <code>NPDev</code>;</li>
+        <li>fora de um repositório, é o nome da pasta atual.</li>
+      </ul>
+      <p>Para escolher outro nome, use <code>--project</code>:</p>
+      <div class="cmd"><pre><code>ptrack run --project NPDev -- npm test</code></pre></div>
+      <h3>Etiqueta (tag)</h3>
+      <p>A <strong>etiqueta</strong> é opcional e livre: uma palavra ou frase curta para agrupar jobs parecidos, mesmo de projetos diferentes. Exemplos: <code>CI Watch</code>, <code>nightly</code>, <code>release</code>.</p>
+      <div class="cmd"><pre><code>ptrack run -d --tag "CI Watch" -- gh run watch 1234</code></pre></div>
+      <h3>Filtrar</h3>
+      <div class="cmd"><pre><code>ptrack list --project NPDev       <span class="c"># só os jobs do NPDev</span>
+ptrack list --tag "ci watch"      <span class="c"># maiúsculas e minúsculas tanto faz</span></code></pre></div>
+      <h3>Definir para uma sessão inteira</h3>
+      <p>Para não repetir a opção em todo comando, defina uma variável de ambiente. Todos os jobs iniciados naquele terminal recebem o valor.</p>
+      <div class="cmd"><pre><code>$env:PTRACK_TAG = "CI Watch"        <span class="c"># PowerShell (Windows)</span>
+export PTRACK_TAG="CI Watch"        <span class="c"># macOS e Linux</span></code></pre></div>
+      <p>Para o projeto, a variável é <code>PTRACK_PROJECT</code>. O <code>ptrack rerun</code> mantém o projeto e a etiqueta do job original. O painel mostra os dois em cada job, e o servidor MCP permite que o agente filtre por eles.</p>
+    </section>
+
+    <section id="painel" data-title="Painel no navegador">
+      <h2>Painel no navegador</h2>
+      <p>Para quem prefere botões a comandos:</p>
+      <div class="cmd"><pre><code>ptrack ui</code></pre></div>
+      <p>Abre uma página no seu navegador com todos os jobs, atualizada ao vivo. Nela você pode:</p>
+      <ul>
+        <li><strong>clicar num job</strong> para ver a saída dele;</li>
+        <li>usar os botões <strong>Pause</strong>, <strong>Resume</strong> e <strong>Stop</strong>;</li>
+        <li>usar o botão <strong>Rerun</strong> num job terminado para rodá-lo de novo na mesma pasta;</li>
+        <li>escolher um projeto ou uma etiqueta nos menus do topo (<strong>All projects</strong>, <strong>All tags</strong>) para ver só esses jobs. A página lembra a sua escolha;</li>
+        <li>marcar <strong>Show older jobs</strong> para ver também os antigos;</li>
+        <li>marcar <strong>Notify when jobs end</strong> para receber um aviso do navegador quando um job terminar. Funciona só enquanto a página estiver aberta. Na primeira vez, o navegador pede permissão.</li>
+      </ul>
+      <p>No topo aparece quantos jobs estão rodando e se a página está <em>live</em> (conectada) ou <em>offline</em> (o <code>ptrack ui</code> foi fechado).</p>
+      <h3>Segurança do painel</h3>
+      <p>A página só pode ser aberta <strong>do seu próprio computador</strong>. O endereço contém uma chave aleatória, que muda toda vez que você roda <code>ptrack ui</code>. Para fechar o painel, volte ao terminal e aperte <strong>Ctrl+C</strong>.</p>
+      <div class="cmd"><pre><code>ptrack ui --port 8765    <span class="c"># usar uma porta fixa</span>
+ptrack ui --no-open      <span class="c"># não abrir o navegador sozinho (o endereço aparece no terminal)</span></code></pre></div>
+    </section>
+
+    <section id="avisos" data-title="Avisos quando um job termina">
+      <h2>Avisos quando um job termina</h2>
+      <p>Assim você pode largar o computador e ser avisado quando o build acabar.</p>
+      <h3>Notificação na área de trabalho</h3>
+      <div class="cmd"><pre><code>ptrack notify on      <span class="c"># liga (vem desligado)</span>
+ptrack notify test    <span class="c"># manda uma notificação de teste agora</span>
+ptrack notify         <span class="c"># mostra a configuração atual</span>
+ptrack notify off     <span class="c"># desliga</span></code></pre></div>
+      <p>Para não incomodar, só avisam os jobs que rodaram <strong>pelo menos 30 segundos</strong>. Jobs que você mesmo parou não avisam, porque você já sabe. Para mudar o mínimo:</p>
+      <div class="cmd"><pre><code>ptrack notify min-seconds 120</code></pre></div>
+      <p>O ptrack usa o que o sistema já tem: no Windows a notificação aparece como vinda do “Windows PowerShell”; no macOS usa o <code>osascript</code>; no Linux usa o <code>notify-send</code>. No Ubuntu, se o <code>notify-send</code> faltar, instale com <code>sudo apt install libnotify-bin</code>.</p>
+
+      <h3>Aviso no celular ou no chat (webhook)</h3>
+      <p>Um webhook é um endereço da internet que recebe mensagens automáticas. Com ele, o ptrack manda um aviso para o Slack, o Discord ou o app ntfy no celular sempre que um job termina.</p>
+      <div class="cmd"><pre><code>ptrack notify webhook https://hooks.slack.com/services/...   <span class="c"># Slack ou Discord</span>
+ptrack notify test                                           <span class="c"># manda um teste</span>
+ptrack notify webhook off                                    <span class="c"># desliga</span></code></pre></div>
+      <p><strong>No celular, com o app gratuito ntfy:</strong></p>
+      <ol class="steps">
+        <li><p>Instale o app <strong>ntfy</strong> no celular e assine um tópico com um nome difícil de adivinhar, por exemplo <code>meus-builds-x7q2</code>.</p></li>
+        <li><p>No computador, configure o ptrack para mandar texto simples a esse tópico:</p>
+          <div class="cmd"><pre><code>ptrack notify webhook https://ntfy.sh/meus-builds-x7q2
+ptrack notify webhook-format text</code></pre></div></li>
+        <li><p>Teste com <code>ptrack notify test</code>. O aviso deve chegar no celular.</p></li>
+      </ol>
+      <div class="note warn"><b class="t">Cuidado com o que é enviado</b><p>A mensagem leva o comando e a última linha da saída. Só use um serviço em que você confia. No ntfy público, qualquer pessoa que souber o nome do tópico pode ler as mensagens, por isso escolha um nome difícil de adivinhar.</p></div>
+      <p>Para quem usa scripts: no formato padrão (JSON) a mensagem tem os campos <code>text</code> (lido pelo Slack), <code>content</code> (lido pelo Discord) e <code>job</code> (o registro completo do job). O endereço precisa começar com <code>http://</code> ou <code>https://</code>. O envio usa o <code>curl</code>, que já vem no Windows 10 ou mais novo, no macOS e no Linux.</p>
+    </section>
+
+    <section id="agentes" data-title="Usar com agentes de IA">
+      <h2>Usar com agentes de IA</h2>
+      <p>Há três formas, da mais simples à mais automática. Dá para combinar.</p>
+
+      <h3>1. Dar instruções ao agente</h3>
+      <p>Funciona com qualquer agente. O comando <code>ptrack instructions</code> mostra o texto certo, e você pode acrescentá-lo direto ao arquivo de instruções do agente:</p>
+      <div class="cmd"><pre><code>ptrack instructions | Add-Content AGENTS.md    <span class="c"># PowerShell (Windows)</span>
+ptrack instructions &gt;&gt; AGENTS.md               <span class="c"># macOS e Linux</span></code></pre></div>
+      <p>Troque <code>AGENTS.md</code> pelo arquivo que o seu agente lê (veja a tabela em <a href="#receitas">Receitas por agente</a>). O texto é este:</p>
+      <div class="cmd"><pre><code>## Long-running commands
+Run any command that may take more than ~30 seconds (builds, test suites, servers, downloads,
+migrations) through `ptrack`:
+- In the background: `ptrack run -d -l "&lt;short label&gt;" -- &lt;command&gt;`. It prints a job id.
+- To check progress cheaply: `ptrack status &lt;id&gt;` or `ptrack list`. They show the state and the
+  last output line, so there is no need to read the log.
+- To wait for the result: `ptrack wait &lt;id&gt; --timeout 600`. It exits with the job's exit code and
+  prints the last 20 lines only if the job failed.
+- In the foreground with little output: `ptrack run -q -- &lt;command&gt;`. It prints one summary line,
+  plus the last lines on failure.
+- To stop a job: `ptrack stop &lt;id&gt;`.
+- Add `--tag "&lt;tag&gt;"` to group related jobs; `ptrack list --tag "&lt;tag&gt;"` shows only those.</code></pre></div>
+      <p>O texto está em inglês de propósito: é o idioma que os agentes seguem com mais precisão.</p>
+
+      <h3>2. Servidor MCP</h3>
+      <p>MCP é um padrão que permite ao agente “conversar” com ferramentas. Com ele, o agente consulta os jobs numa única chamada curta, sem ler logs.</p>
+      <p>No Claude Code:</p>
+      <div class="cmd"><pre><code>claude mcp add --scope user ptrack -- ptrack mcp</code></pre></div>
+      <p>Em outros clientes (Cursor, Gemini CLI…), adicione ao arquivo de configuração MCP:</p>
+      <div class="cmd"><pre><code>{ "mcpServers": { "ptrack": { "command": "ptrack", "args": ["mcp"] } } }</code></pre></div>
+      <p>Por padrão o agente <strong>só pode olhar</strong>: listar (inclusive filtrando por projeto ou etiqueta), ver status, ver saída e esperar. Para deixá-lo também parar, pausar, retomar e rodar de novo, use <code>ptrack mcp --allow-control</code>. Iniciar comandos novos continua sendo feito pelo terminal, de propósito.</p>
+
+      <h3>3. Gancho automático no Claude Code</h3>
+      <p>Com o gancho (hook), você não depende de o agente se lembrar de usar o ptrack. Os comandos demorados passam por ele sozinhos.</p>
+      <div class="cmd"><pre><code>ptrack hook install            <span class="c"># para todos os seus projetos</span>
+ptrack hook install --project  <span class="c"># só para o projeto atual</span></code></pre></div>
+      <p><strong>Reinicie o Claude Code</strong> depois de instalar. A partir daí:</p>
+      <ul>
+        <li>Comandos demorados (builds, testes, instalações, servidores, Docker…) e todo comando em segundo plano viram jobs automaticamente. O Claude vê a mesma saída de antes, com uma linha <code>[ptrack]</code> no início e outra no fim.</li>
+        <li>Cada job recebe como nome a descrição que o Claude deu ao comando, e fica ligado à <strong>sessão e ao pedido</strong> que o originou. Uma prévia de até 200 caracteres de cada pedido fica guardada no seu computador. Use <code>--no-prompts</code> se não quiser isso.</li>
+        <li><code>--all</code> faz <em>todos</em> os comandos passarem pelo ptrack, não só os demorados.</li>
+      </ul>
+      <p>Para desfazer:</p>
+      <div class="cmd"><pre><code>ptrack hook uninstall            <span class="c"># ou: ptrack hook uninstall --project</span></code></pre></div>
+      <p>Suas outras configurações são mantidas, e uma cópia de segurança é salva ao lado do arquivo de configurações.</p>
+      <div class="note warn"><b class="t">Efeito nas permissões</b><p>O gancho nunca aprova nada sozinho. Mas como o comando é reescrito, uma regra de permissão como <code>Bash(npm test:*)</code> deixa de combinar com o <code>npm test</code> embrulhado. No modo de permissão padrão, o Claude Code vai pedir sua confirmação antes de rodar. O modo automático e o modo sem confirmação não são afetados.</p></div>
+
+      <h3>Quem iniciou cada job</h3>
+      <p>O ptrack reconhece sozinho Claude Code, Codex, Cursor, Antigravity CLI e Gemini CLI, e mostra o nome na coluna AGENT. No Claude Code e no Codex ele também guarda a sessão. Para outros agentes (o Aider, por exemplo), use <code>--agent</code> e <code>--session</code>, ou defina as variáveis de ambiente <code>PTRACK_AGENT</code> e <code>PTRACK_SESSION</code>.</p>
+    </section>
+
+    <section id="receitas" data-title="Receitas por agente">
+      <h2>Receitas por agente</h2>
+      <p>Como configurar o ptrack em cada agente. O passo das instruções é o mais importante; o MCP é um bônus.</p>
+      <div class="tablebox"><table>
+        <thead><tr><th>Agente</th><th>Arquivo de instruções</th><th>MCP</th><th>Reconhecido sozinho</th></tr></thead>
+        <tbody>
+          <tr><td>Claude Code</td><td><code>CLAUDE.md</code></td><td><code>claude mcp add</code></td><td>Sim, com sessão (e o gancho)</td></tr>
+          <tr><td>Codex</td><td><code>AGENTS.md</code></td><td><code>codex mcp add</code></td><td>Sim, com sessão</td></tr>
+          <tr><td>Cursor</td><td><code>AGENTS.md</code></td><td><code>.cursor/mcp.json</code></td><td>Sim</td></tr>
+          <tr><td>Antigravity CLI</td><td><code>AGENTS.md</code></td><td><code>mcp_config.json</code></td><td>Sim</td></tr>
+          <tr><td>Gemini CLI</td><td><code>GEMINI.md</code></td><td><code>gemini mcp add</code></td><td>Sim</td></tr>
+          <tr><td>Aider</td><td><code>CONVENTIONS.md</code></td><td>Não tem</td><td>Não: use <code>PTRACK_AGENT=aider</code></td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>Codex</h3>
+      <div class="cmd"><pre><code>ptrack instructions | Add-Content AGENTS.md
+codex mcp add ptrack -- ptrack mcp</code></pre></div>
+      <p>Se o Codex estiver no modo protegido (sandbox) e não puder gravar fora da pasta do projeto, guarde os dados do ptrack dentro do projeto com <code>PTRACK_HOME=.ptrack</code> e coloque <code>.ptrack/</code> no <code>.gitignore</code>.</p>
+
+      <h3>Cursor</h3>
+      <div class="cmd"><pre><code>ptrack instructions | Add-Content AGENTS.md</code></pre></div>
+      <p>Para o MCP, crie o arquivo <code>.cursor/mcp.json</code> na pasta do projeto (ou <code>~/.cursor/mcp.json</code> para todos os projetos):</p>
+      <div class="cmd"><pre><code>{ "mcpServers": { "ptrack": { "type": "stdio", "command": "ptrack", "args": ["mcp"] } } }</code></pre></div>
+
+      <h3>Antigravity CLI e Gemini CLI</h3>
+      <p>Em junho de 2026 o Google substituiu o Gemini CLI pelo Antigravity CLI (comando <code>agy</code>). No Antigravity CLI:</p>
+      <div class="cmd"><pre><code>ptrack instructions | Add-Content AGENTS.md</code></pre></div>
+      <p>Para o MCP, coloque isto em <code>~/.gemini/config/mcp_config.json</code> (todos os projetos) ou <code>.agents/mcp_config.json</code> (só este projeto):</p>
+      <div class="cmd"><pre><code>{ "mcpServers": { "ptrack": { "command": "ptrack", "args": ["mcp"] } } }</code></pre></div>
+      <p>Se você ainda usa o Gemini CLI:</p>
+      <div class="cmd"><pre><code>ptrack instructions | Add-Content GEMINI.md
+gemini mcp add --scope user ptrack ptrack mcp</code></pre></div>
+
+      <h3>Aider</h3>
+      <div class="cmd"><pre><code>ptrack instructions | Add-Content CONVENTIONS.md</code></pre></div>
+      <p>Para o Aider ler esse arquivo sempre, adicione a linha <code>read: CONVENTIONS.md</code> ao arquivo <code>.aider.conf.yml</code>. O Aider não se identifica sozinho; para ver “aider” na coluna AGENT, abra-o assim:</p>
+      <div class="cmd"><pre><code>$env:PTRACK_AGENT = "aider"; aider     <span class="c"># PowerShell</span>
+PTRACK_AGENT=aider aider               <span class="c"># macOS e Linux</span></code></pre></div>
+
+      <h3>Conferir se funcionou</h3>
+      <p>Peça ao agente algo demorado, como “rode os testes”, e depois rode <code>ptrack list</code>. O job deve aparecer com o nome do agente na coluna AGENT e o seu projeto na coluna PROJECT. Se AGENT mostrar <code>-</code>, o agente não se identificou: use <code>PTRACK_AGENT</code> como no Aider.</p>
+    </section>
+
+    <section id="dados" data-title="Onde ficam os dados">
+      <h2>Onde ficam os dados</h2>
+      <p>Tudo fica em arquivos comuns, numa pasta só sua:</p>
+      <div class="tablebox"><table>
+        <thead><tr><th>Sistema</th><th>Pasta</th></tr></thead>
+        <tbody>
+          <tr><td>Windows</td><td><code>%LOCALAPPDATA%\ptrack</code></td></tr>
+          <tr><td>Linux</td><td><code>~/.local/share/ptrack</code></td></tr>
+          <tr><td>macOS</td><td><code>~/Library/Application Support/ptrack</code></td></tr>
+        </tbody>
+      </table></div>
+      <p>Dentro dela, <code>jobs/&lt;id&gt;.json</code> é a ficha de cada job (dá para abrir num editor de texto) e <code>logs/&lt;id&gt;.log</code> é a saída completa. Para usar outra pasta, defina a variável de ambiente <code>PTRACK_HOME</code>. Isso é útil para testes, porque não mistura com os seus jobs reais.</p>
+      <p>Para scripts, <code>ptrack list --json</code> e <code>ptrack status ID --json</code> devolvem os dados em formato JSON.</p>
+      <div class="note warn"><b class="t">Senhas e segredos</b><p>O comando e a saída são guardados como estão. <strong>Não passe senhas como parte do comando.</strong> Use variáveis de ambiente, que o ptrack nunca registra.</p></div>
+    </section>
+
+    <section id="limites" data-title="Limites conhecidos">
+      <h2>Limites conhecidos</h2>
+      <ul>
+        <li><strong>Parada educada no Windows.</strong> Muitos programas encerram quando recebem o pedido de parada (Ctrl+Break), mas alguns não. O Java imprime informações de depuração e o <code>ping</code> imprime estatísticas. Nesses casos o ptrack encerra à força quando o tempo de espera acaba.</li>
+        <li><strong>Programas que se desligam de propósito podem escapar.</strong> Um programa que se separa do grupo de processos (como serviços do sistema fazem) deixa de ser alcançado por stop e pause. Ferramentas comuns de desenvolvimento não fazem isso.</li>
+        <li><strong>Ajudantes em segundo plano continuam depois de um término normal.</strong> Por exemplo, o daemon do Gradle iniciado por um build continua rodando, como continuaria sem o ptrack. O <code>stop</code> encerra esses também.</li>
+        <li><strong>Acentos no Windows.</strong> Programas que escrevem numa codificação antiga (como o <code>ping</code> num Windows em português) podem aparecer com letras acentuadas estranhas em <code>tail</code> e na última linha. O arquivo de log guarda os bytes originais.</li>
+        <li><strong>Pausa</strong>: veja o aviso em <a href="#comandos">ptrack pause</a>.</li>
+      </ul>
+    </section>
+
+    <section id="problemas" data-title="Solução de problemas">
+      <h2>Solução de problemas</h2>
+      <h3>“ptrack: comando não encontrado” / “não é reconhecido”</h3>
+      <p>Feche o terminal e abra outro: o PATH só é lido quando o terminal abre. No macOS e no Linux, confira se o instalador pediu para adicionar uma linha ao seu perfil do shell, e adicione.</p>
+      <h3>“npm error enoent Could not read package.json”</h3>
+      <p>Você rodou o comando fora da pasta do projeto. O npm procura o arquivo <code>package.json</code> na pasta atual. Entre na pasta do projeto com <code>cd</code> e rode de novo. O ptrack registra o job como <span class="state st-failed">failed</span>, como deveria.</p>
+      <h3>“failed to start: could not start 'gradle': program not found”</h3>
+      <p>O programa não está instalado, ou não está no PATH. Teste sem o ptrack (só <code>gradle --version</code>): se também não funcionar, instale o programa primeiro. Muitos projetos trazem o próprio script: tente <code>.\gradlew build</code> (Windows) ou <code>./gradlew build</code> (macOS e Linux) dentro da pasta do projeto.</p>
+      <h3>O código de saída é negativo, como -4058</h3>
+      <p>No Windows alguns programas (o npm, por exemplo) terminam com números negativos. É só outro código de erro. O job fica <span class="state st-failed">failed</span> e o próprio ptrack sai com o código 1.</p>
+      <h3>O job aparece como <span class="state st-lost">lost</span></h3>
+      <p>O ptrack que vigiava o job sumiu: o computador reiniciou, o terminal foi fechado à força ou o processo foi encerrado de fora. Confira a saída com <code>ptrack tail ID</code> e, se precisar, rode de novo com <code>ptrack rerun ID</code>.</p>
+      <h3>Meu comando com <code>&amp;&amp;</code> ou <code>|</code> não funciona</h3>
+      <p>Use a opção <code>-s</code> e coloque o comando inteiro entre aspas: <code>ptrack run -s -- "a &amp;&amp; b"</code>.</p>
+      <h3>O job ficou parado esperando uma resposta</h3>
+      <p>Jobs não recebem teclado. Use a opção do programa que responde “sim” automaticamente (<code>-y</code>, <code>--yes</code>, <code>--non-interactive</code>).</p>
+      <h3>A notificação não aparece</h3>
+      <p>Rode <code>ptrack notify</code> para conferir se está ligada, depois <code>ptrack notify test</code>. Lembre que só avisam jobs com pelo menos 30 segundos. No Windows, confira se as notificações do “Windows PowerShell” não estão bloqueadas nas configurações do sistema. No Linux, confira se o <code>notify-send</code> está instalado.</p>
+      <h3>O painel diz “offline”</h3>
+      <p>O <code>ptrack ui</code> foi fechado. Rode de novo e use o novo endereço, porque a chave muda a cada vez.</p>
+      <h3>O Claude Code passou a pedir confirmação para comandos que antes rodavam direto</h3>
+      <p>É o efeito do gancho nas regras de permissão (veja <a href="#agentes">Gancho automático</a>). Ajuste as regras ou use <code>ptrack hook uninstall</code>.</p>
+      <h3>Windows: “Acesso negado” ao atualizar o ptrack</h3>
+      <p>O Windows não deixa substituir um programa que está rodando. Pare os jobs em andamento (<code>ptrack list</code>, depois <code>ptrack stop ID</code>) e feche o <code>ptrack ui</code> antes de atualizar.</p>
+    </section>
+
+    <section id="referencia" data-title="Referência rápida">
+      <h2>Referência rápida</h2>
+      <div class="tablebox"><table>
+        <thead><tr><th>Comando</th><th>O que faz</th></tr></thead>
+        <tbody>
+          <tr><td><code>ptrack run [opções] -- cmd</code></td><td>Roda um comando como job.</td></tr>
+          <tr><td><code>ptrack list [--all] [--here] [--json]</code></td><td>Lista os jobs ativos e recentes.</td></tr>
+          <tr><td><code>ptrack list --project N --tag T</code></td><td>Só os jobs de um projeto ou etiqueta.</td></tr>
+          <tr><td><code>ptrack status [ID] [--json]</code></td><td>Detalhes de um job (sem ID: o mais recente).</td></tr>
+          <tr><td><code>ptrack tail [ID] [-n N] [-f]</code></td><td>Mostra a saída; <code>-f</code> acompanha ao vivo.</td></tr>
+          <tr><td><code>ptrack wait [ID] [--timeout S]</code></td><td>Espera terminar; sai com o código do job (124 se o tempo acabar).</td></tr>
+          <tr><td><code>ptrack stop ID [--grace S] [--force]</code></td><td>Para o job e tudo o que ele abriu.</td></tr>
+          <tr><td><code>ptrack pause ID</code> / <code>resume ID</code></td><td>Congela e descongela.</td></tr>
+          <tr><td><code>ptrack rerun ID [-d] [-q]</code></td><td>Roda de novo um job terminado.</td></tr>
+          <tr><td><code>ptrack prune [--days N] [--all]</code></td><td>Apaga jobs terminados (padrão: mais de 7 dias).</td></tr>
+          <tr><td><code>ptrack ui [--port N] [--no-open]</code></td><td>Painel no navegador.</td></tr>
+          <tr><td><code>ptrack mcp [--allow-control]</code></td><td>Servidor MCP para agentes.</td></tr>
+          <tr><td><code>ptrack hook install / uninstall</code></td><td>Gancho automático do Claude Code.</td></tr>
+          <tr><td><code>ptrack notify on|off|test|min-seconds N</code></td><td>Notificações na área de trabalho.</td></tr>
+          <tr><td><code>ptrack notify webhook URL|off</code></td><td>Aviso por webhook (Slack, Discord, ntfy).</td></tr>
+          <tr><td><code>ptrack instructions</code></td><td>Mostra o texto para o arquivo de instruções do agente.</td></tr>
+          <tr><td><code>ptrack version</code></td><td>Mostra a versão instalada.</td></tr>
+          <tr><td><code>ptrack</code></td><td>Sem nada: mostra a ajuda em inglês.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="glossario" data-title="Glossário">
+      <h2>Glossário</h2>
+      <dl class="gloss">
+        <dt>Agente de IA</dt><dd>Um assistente que escreve código e roda comandos por você, como Claude Code, Codex ou Cursor.</dd>
+        <dt>Código de saída</dt><dd>Número que um programa devolve ao terminar: 0 é sucesso, qualquer outro é erro.</dd>
+        <dt>Daemon</dt><dd>Programa que fica rodando em segundo plano, sem janela.</dd>
+        <dt>Hook (gancho)</dt><dd>Um ponto onde um programa deixa outro interferir. O ptrack usa o do Claude Code para embrulhar comandos.</dd>
+        <dt>Job</dt><dd>Um comando acompanhado pelo ptrack.</dd>
+        <dt>Log</dt><dd>Arquivo com tudo o que um comando escreveu na tela.</dd>
+        <dt>MCP</dt><dd>Model Context Protocol: um padrão para agentes de IA usarem ferramentas.</dd>
+        <dt>PATH</dt><dd>Lista de pastas onde o sistema procura os comandos que você digita.</dd>
+        <dt>Projeto</dt><dd>O conjunto de arquivos de um trabalho, normalmente uma pasta ou repositório git, como NPDev.</dd>
+        <dt>Processo</dt><dd>Um programa em execução. Um comando pode abrir vários.</dd>
+        <dt>Segundo plano</dt><dd>Rodar sem ocupar o terminal; você pode continuar digitando outras coisas.</dd>
+        <dt>Shell</dt><dd>O programa que interpreta o que você digita no terminal (cmd.exe, PowerShell, sh, bash…).</dd>
+        <dt>Supervisor</dt><dd>A cópia do ptrack que vigia um job do início ao fim.</dd>
+        <dt>Tag (etiqueta)</dt><dd>Palavra ou frase livre para agrupar jobs, como “CI Watch”.</dd>
+        <dt>Token</dt><dd>Unidade de texto pela qual agentes de IA são cobrados. Ler logs longos gasta muitos.</dd>
+        <dt>Webhook</dt><dd>Endereço da internet que recebe mensagens automáticas.</dd>
+      </dl>
+    </section>
+
+    <footer>Manual do ptrack v0.5 · Licença MIT · Projeto ProcessTrackerForAI no GitHub</footer>
+  </main>
+</div>
+
+<script>
+(function () {
+  const sections = Array.from(document.querySelectorAll("main section"));
+  const toc = document.getElementById("toc");
+  const links = new Map();
+
+  // Table of contents built from the sections, so it can never drift from the content.
+  sections.forEach(function (s) {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = "#" + s.id;
+    a.textContent = s.dataset.title;
+    li.appendChild(a);
+    toc.appendChild(li);
+    links.set(s.id, a);
+  });
+
+  // Highlight the section being read.
+  const io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) {
+        links.forEach(function (a) { a.classList.remove("active"); });
+        const a = links.get(e.target.id);
+        if (a) a.classList.add("active");
+      }
+    });
+  }, { rootMargin: "0px 0px -70% 0px" });
+  sections.forEach(function (s) { io.observe(s); });
+
+  // Search: hide sections that don't mention every word typed.
+  const norm = function (t) { return t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, ""); };
+  const texts = sections.map(function (s) { return norm(s.textContent); });
+  const q = document.getElementById("q");
+  q.addEventListener("input", function () {
+    const words = norm(q.value).split(/\s+/).filter(Boolean);
+    let shown = 0;
+    sections.forEach(function (s, i) {
+      const ok = words.every(function (w) { return texts[i].includes(w); });
+      s.hidden = !ok;
+      links.get(s.id).parentElement.hidden = !ok;
+      if (ok) shown++;
+    });
+    document.getElementById("noresult").hidden = shown > 0;
+  });
+
+  // Copy buttons on every command block.
+  let toastTimer;
+  function toast(msg) {
+    let t = document.querySelector(".toast");
+    if (!t) { t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 1600);
+  }
+  document.querySelectorAll(".cmd").forEach(function (box) {
+    const b = document.createElement("button");
+    b.className = "copy"; b.type = "button"; b.textContent = "Copiar";
+    b.addEventListener("click", function () {
+      const code = box.querySelector("code").cloneNode(true);
+      code.querySelectorAll(".c").forEach(function (c) { c.remove(); });
+      const text = code.textContent.replace(/[ \t]+$/gm, "");
+      navigator.clipboard.writeText(text).then(function () {
+        b.textContent = "Copiado"; toast("Comando copiado");
+        setTimeout(function () { b.textContent = "Copiar"; }, 1600);
+      }).catch(function () {
+        const r = document.createRange(); r.selectNodeContents(box.querySelector("code"));
+        const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        toast("Texto selecionado: use Ctrl+C");
+      });
+    });
+    box.appendChild(b);
+  });
+
+  // Install tabs.
+  const tabs = document.querySelectorAll('[role="tab"]');
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      tabs.forEach(function (t) {
+        const on = t === tab;
+        t.setAttribute("aria-selected", on ? "true" : "false");
+        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      });
+    });
+  });
+  // Show macOS/Linux first for visitors on those systems.
+  if (!/Win/i.test(navigator.platform || navigator.userAgent)) document.getElementById("tab-unix").click();
+})();
+</script>
+</body>
+</html>

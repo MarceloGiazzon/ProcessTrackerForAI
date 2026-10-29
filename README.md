@@ -18,7 +18,10 @@ tokens) and the agent can make one short call instead of reading a log.
 
 - **A live dashboard in your browser** (`ptrack ui`) and an **MCP server** for agents (`ptrack mcp`).
 
-Status: v0.4, early. Feedback welcome.
+Status: v0.5, early. Feedback welcome.
+
+A step-by-step manual for non-specialists, in Portuguese, is in [docs/manual.html](docs/manual.html)
+(download it and open it in your browser).
 
 ## Install
 
@@ -108,7 +111,13 @@ tool `jobs_list` accepts `project` and `tag` filters.
 
 ## Tell your AI agent to use it
 
-Paste this into your agent's instructions file (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`, …):
+Add this text to your agent's instructions file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
+`CONVENTIONS.md`, …). `ptrack instructions` prints it, so you can append it in one go:
+
+```sh
+ptrack instructions >> AGENTS.md                 # Git Bash, Linux, macOS
+ptrack instructions | Add-Content AGENTS.md      # PowerShell
+```
 
 ```markdown
 ## Long-running commands
@@ -122,7 +131,11 @@ migrations) through `ptrack`:
 - In the foreground with little output: `ptrack run -q -- <command>`. It prints one summary line,
   plus the last lines on failure.
 - To stop a job: `ptrack stop <id>`.
+- Add `--tag "<tag>"` to group related jobs; `ptrack list --tag "<tag>"` shows only those.
 ```
+
+**Step-by-step setup for Codex, Cursor, Antigravity CLI / Gemini CLI and Aider** (instructions file,
+MCP and attribution for each): see [docs/agents.md](docs/agents.md).
 
 ## Dashboard
 
@@ -137,7 +150,9 @@ Ctrl+C in the terminal to close it. Options: `--port N` and `--no-open`.
 
 Tick **Notify when jobs end** to get a notification from your browser whenever a job finishes.
 This works only while the page is open. The first time, the browser asks for permission. The
-**Rerun** button on a finished job starts its command again, in the same folder.
+**Rerun** button on a finished job starts its command again, in the same folder. The **project**
+and **tag** menus at the top show only the jobs of one project or tag; the page remembers your
+choice.
 
 ## Notifications when a job ends
 
@@ -218,9 +233,12 @@ Auto mode and bypass mode are not affected.
 
 ## Who started each job
 
-ptrack works out which agent and session started a job by itself when the agent provides that
-information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other agent, use
-`--agent` / `--session`, or set the `PTRACK_AGENT` / `PTRACK_SESSION` environment variables.
+ptrack works out which agent started a job from the variables agents set for the commands they
+run: `AI_AGENT`, then Claude Code (`CLAUDECODE`), Codex (`CODEX_THREAD_ID`, `CODEX_SANDBOX`,
+`CODEX_CI`), Cursor (`CURSOR_AGENT`), Antigravity CLI (`ANTIGRAVITY_AGENT`) and Gemini CLI
+(`GEMINI_CLI`). The session comes from `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID`. For any other
+agent (Aider, for example), use `--agent` / `--session`, or set the `PTRACK_AGENT` /
+`PTRACK_SESSION` environment variables. These two always win.
 
 ## Commands
 
@@ -241,6 +259,7 @@ information (`AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`). For any other 
 | `ptrack hook uninstall [--project]` | Removes the hook. |
 | `ptrack notify [on\|off\|min-seconds N\|test]` | Desktop notification when a job ends. |
 | `ptrack notify webhook URL\|off`, `ptrack notify webhook-format json\|text` | Also POST each finished job to a web address. |
+| `ptrack instructions` | Prints the text that tells an AI agent to use ptrack, for its instructions file. |
 
 Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
 `-s/--shell` (run the text through `cmd.exe` or `sh`, for `&&`, pipes, etc.), `--project NAME`,
@@ -306,8 +325,8 @@ no longer exists, the job is shown as **lost**.
 - ✅ v0.2: local dashboard (`ptrack ui`) and MCP server (`ptrack mcp`).
 - ✅ v0.3: Claude Code hook with prompt attribution.
 - ✅ v0.4: rerun, notifications when a job ends (browser, desktop, webhook), no orphaned processes
-  on Linux/macOS.
-- Next: recipes for more agents (Codex, Cursor, Gemini CLI, Aider).
+  on Linux/macOS, projects and tags.
+- ✅ v0.5: setup recipes for Codex, Cursor, Antigravity CLI / Gemini CLI and Aider.
 - v1.0: stable record format, signed binaries, winget / Scoop / Homebrew packages.
 
 ## Development

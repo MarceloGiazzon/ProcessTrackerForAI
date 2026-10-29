@@ -140,6 +140,25 @@ fn detach(opts: &RunOpts) -> i32 {
     }
 }
 
+/// Variables that agents set for the commands they run, and the agent name
+/// each one means. Checked in order, after `PTRACK_AGENT` and `AI_AGENT`.
+const AGENT_MARKERS: &[(&str, &str)] = &[
+    ("CLAUDECODE", "claude-code"),
+    ("CODEX_THREAD_ID", "codex"),
+    ("CODEX_SANDBOX", "codex"),
+    ("CODEX_CI", "codex"),
+    ("CURSOR_AGENT", "cursor"),
+    ("ANTIGRAVITY_AGENT", "antigravity"),
+    ("GEMINI_CLI", "gemini-cli"),
+];
+
+/// Variables that carry the agent's session id, checked in order.
+const SESSION_MARKERS: &[&str] = &[
+    "PTRACK_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CODEX_THREAD_ID",
+];
+
 fn detect_agent(opts: &RunOpts) -> (Option<String>, Option<String>) {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let agent = opts
@@ -147,12 +166,16 @@ fn detect_agent(opts: &RunOpts) -> (Option<String>, Option<String>) {
         .clone()
         .or_else(|| env("PTRACK_AGENT"))
         .or_else(|| env("AI_AGENT"))
-        .or_else(|| env("CLAUDECODE").map(|_| "claude-code".to_string()));
+        .or_else(|| {
+            AGENT_MARKERS
+                .iter()
+                .find(|(var, _)| env(var).is_some())
+                .map(|(_, name)| name.to_string())
+        });
     let session = opts
         .session
         .clone()
-        .or_else(|| env("PTRACK_SESSION"))
-        .or_else(|| env("CLAUDE_CODE_SESSION_ID"));
+        .or_else(|| SESSION_MARKERS.iter().find_map(|var| env(var)));
     (agent, session)
 }
 

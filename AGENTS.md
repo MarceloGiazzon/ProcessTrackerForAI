@@ -98,8 +98,11 @@ Windows gotcha: Windows can't overwrite a running `.exe`. If a background job is
 - Push after each commit (`git push origin main`), so CI runs the tests on Linux and macOS. Then
   check the result with `gh run list --limit 1` / `gh run watch <id>`. A phase is only done when
   CI is green.
-- Never push tags or create releases. The owner does that.
+- Releases: push a version tag (`git tag -a vX.Y.Z -m "..."`, `git push origin vX.Y.Z`) **only when
+  the owner asks for a release**, and only from a commit on `main` whose CI is green. The tag
+  starts `.github/workflows/release.yml`; watch it until it passes. Never delete or move a tag.
 
 ## Work plan
 
-Planned features and step-by-step instructions are in [`docs/plan/`](docs/plan/README.md).
+Planned features and step-by-step instructions go in [`docs/plan/`](docs/plan/README.md). Finished
+plans are kept in `docs/plan/done/` for reference only. Don't follow them again.

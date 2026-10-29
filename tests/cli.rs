@@ -173,6 +173,65 @@ fn a_negative_exit_code_still_fails() {
 }
 
 #[test]
+fn agents_are_recognised_by_the_variables_they_set() {
+    let h = Home::new("agents");
+    // What this test itself may be running under must not leak in.
+    const ALL: &[&str] = &[
+        "PTRACK_AGENT",
+        "PTRACK_SESSION",
+        "AI_AGENT",
+        "CLAUDECODE",
+        "CLAUDE_CODE_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_SANDBOX",
+        "CODEX_CI",
+        "CURSOR_AGENT",
+        "ANTIGRAVITY_AGENT",
+        "GEMINI_CLI",
+    ];
+    let started_by = |env: &[(&str, &str)]| -> (serde_json::Value, serde_json::Value) {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ptrack"));
+        cmd.args(["run", "-q", "-s", "--", "echo hi"])
+            .env("PTRACK_HOME", &h.0);
+        for var in ALL {
+            cmd.env_remove(var);
+        }
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        assert!(cmd.output().unwrap().status.success());
+        let j = h.json(&["status", "--json"]);
+        (j["agent"].clone(), j["session"].clone())
+    };
+
+    let (agent, session) = started_by(&[("CODEX_THREAD_ID", "thread-7")]);
+    assert_eq!(
+        (agent.as_str(), session.as_str()),
+        (Some("codex"), Some("thread-7"))
+    );
+    assert_eq!(started_by(&[("CURSOR_AGENT", "1")]).0, "cursor");
+    assert_eq!(started_by(&[("GEMINI_CLI", "1")]).0, "gemini-cli");
+    assert_eq!(started_by(&[("ANTIGRAVITY_AGENT", "1")]).0, "antigravity");
+    // An explicit name wins over any marker.
+    assert_eq!(
+        started_by(&[("PTRACK_AGENT", "aider"), ("CODEX_SANDBOX", "seatbelt")]).0,
+        "aider"
+    );
+    assert_eq!(started_by(&[]).0, serde_json::Value::Null);
+}
+
+#[test]
+fn instructions_print_the_agent_block() {
+    let h = Home::new("instructions");
+    let out = h.ptrack(&["instructions"]);
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("## Long-running commands"), "{text}");
+    assert!(text.contains("ptrack run -d") && text.contains("ptrack wait"));
+    assert!(text.is_ascii(), "safe for any shell redirection");
+}
+
+#[test]
 fn missing_program_fails_cleanly() {
     let h = Home::new("missing");
     let out = h.ptrack(&["run", "-q", "--", "definitely-not-a-real-program-xyz"]);
@@ -342,7 +401,17 @@ fn dashboard_requires_token_and_local_host() {
     use std::process::Stdio;
 
     let h = Home::new("ui");
-    h.ptrack(&["run", "-q", "-s", "--", "echo hi"]);
+    h.ptrack(&[
+        "run",
+        "-q",
+        "--project",
+        "NPDev",
+        "--tag",
+        "CI Watch",
+        "-s",
+        "--",
+        "echo hi",
+    ]);
     let mut child = Command::new(env!("CARGO_BIN_EXE_ptrack"))
         .args(["ui", "--port", "0", "--no-open"])
         .env("PTRACK_HOME", &h.0)
@@ -402,6 +471,19 @@ fn dashboard_requires_token_and_local_host() {
     assert_eq!(code, 200);
     let data: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(data["jobs"][0]["state"], "passed");
+    assert_eq!(data["projects"], serde_json::json!(["NPDev"]));
+    assert_eq!(data["tags"], serde_json::json!(["CI Watch"]));
+    assert!(page.contains("id=\"project\"") && page.contains("id=\"tag\""));
+    // Filters, with the tag encoded both ways browsers do it.
+    let count = |path: &str| -> usize {
+        let (code, body) = http("GET", path, &host, &token);
+        assert_eq!(code, 200, "{body}");
+        let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+        data["jobs"].as_array().unwrap().len()
+    };
+    assert_eq!(count("/api/jobs?tag=CI+Watch"), 1);
+    assert_eq!(count("/api/jobs?tag=ci%20watch&project=npdev"), 1);
+    assert_eq!(count("/api/jobs?project=elsewhere"), 0);
     assert_eq!(http("POST", "/api/jobs/last/resume", &host, &token).0, 409);
     let (code, body) = http("POST", "/api/jobs/last/rerun", &host, &token);
     assert_eq!(code, 200, "{body}");

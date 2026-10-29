@@ -68,6 +68,10 @@
     border: 1px solid var(--line); background: var(--btn); color: var(--text);
   }
   button:hover { background: var(--btn-hover); }
+  select {
+    font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 7px; max-width: 180px;
+    border: 1px solid var(--line); background: var(--btn); color: var(--text);
+  }
   button.danger { color: var(--failed); }
   button:disabled { opacity: 0.5; cursor: default; }
   .log { border-top: 1px solid var(--line); }
@@ -101,6 +105,8 @@
   <h1>ptrack</h1>
   <span class="counts" id="counts"></span>
   <span class="spacer"></span>
+  <select id="project" aria-label="Filter by project"><option value="">All projects</option></select>
+  <select id="tag" aria-label="Filter by tag" hidden><option value="">All tags</option></select>
   <label class="toggle"><input type="checkbox" id="all"> Show older jobs</label>
   <label class="toggle" title="Show a notification on this computer when a job finishes (while this page is open)"><input type="checkbox" id="notify"> Notify when jobs end</label>
   <span class="live" id="live"><span class="dot"></span><span id="live-text">live</span></span>
@@ -119,6 +125,12 @@ let openJob = params.get("job");
 let showAll = false;
 try { showAll = localStorage.getItem("ptrack.all") === "1"; } catch (e) {}
 $("all").checked = showAll;
+// Project and tag filters, remembered per browser like "Show older jobs".
+const filters = { project: "", tag: "" };
+try {
+  filters.project = localStorage.getItem("ptrack.project") || "";
+  filters.tag = localStorage.getItem("ptrack.tag") || "";
+} catch (e) {}
 
 function el(tag, attrs, ...children) {
   const n = document.createElement(tag);
@@ -243,17 +255,25 @@ async function refresh() {
         "Open this page with the link printed by ", el("code", {}, "ptrack ui"), " (it includes an access key)."));
       return;
     }
-    const r = await api("/api/jobs" + (showAll ? "?all=1" : ""));
+    const q = new URLSearchParams();
+    if (showAll) q.set("all", "1");
+    if (filters.project) q.set("project", filters.project);
+    if (filters.tag) q.set("tag", filters.tag);
+    const r = await api("/api/jobs" + (q.toString() ? "?" + q : ""));
     if (r.status === 401) throw new Error("access key not accepted; reopen the link from ptrack ui");
     const data = await r.json();
     notifyFinished(data.jobs);
+    fillSelect("project", "All projects", data.projects || [], filters.project);
+    fillSelect("tag", "All tags", data.tags || [], filters.tag);
     const running = data.jobs.filter((j) => j.state === "running").length;
     const paused = data.jobs.filter((j) => j.state === "paused").length;
     $("counts").textContent = running + " running" + (paused ? ", " + paused + " paused" : "");
     document.title = (running ? "(" + running + ") " : "") + "ptrack jobs";
     const list = data.jobs.length
       ? data.jobs.map(renderJob)
-      : [el("div", { class: "notice" }, "No jobs yet. Start one with: ", el("code", {}, "ptrack run -d -- <command>"))];
+      : filters.project || filters.tag
+        ? [el("div", { class: "notice" }, "No jobs match this project or tag. Choose \"All\" in the filters to see every job.")]
+        : [el("div", { class: "notice" }, "No jobs yet. Start one with: ", el("code", {}, "ptrack run -d -- <command>"))];
     rememberLogScroll();
     $("jobs").replaceChildren(...list);
     const pre = $("log");
@@ -269,6 +289,28 @@ async function refresh() {
   } finally {
     inFlight = false;
   }
+}
+
+// Rebuilds a filter's options only when the list changed, so the periodic
+// refresh doesn't close a dropdown the user has open.
+function fillSelect(id, allLabel, values, current) {
+  const sel = $(id);
+  const options = [""].concat(values);
+  if (current && !values.includes(current)) options.push(current);
+  const key = JSON.stringify(options);
+  sel.hidden = options.length === 1;
+  if (sel.dataset.key === key) return;
+  sel.dataset.key = key;
+  sel.replaceChildren(...options.map((v) => el("option", { value: v }, v || allLabel)));
+  sel.value = current;
+}
+
+for (const k of ["project", "tag"]) {
+  $(k).addEventListener("change", (e) => {
+    filters[k] = e.target.value;
+    try { localStorage.setItem("ptrack." + k, filters[k]); } catch (err) {}
+    refresh();
+  });
 }
 
 $("all").addEventListener("change", (e) => {

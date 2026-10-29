@@ -144,6 +144,30 @@ pub fn truncate(s: &str, max: usize) -> String {
     out
 }
 
+/// Decodes a URL query value: `+` is a space and `%XX` a byte. Invalid
+/// escapes are kept as they are; invalid UTF-8 becomes U+FFFD.
+pub fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match bytes[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < bytes.len() => match (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                (Some(h), Some(l)) => {
+                    out.push((h * 16 + l) as u8);
+                    i += 2;
+                }
+                _ => out.push(b'%'),
+            },
+            b => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Returns the last `n` lines of a file without reading all of it.
 pub fn last_lines(path: &Path, n: usize) -> std::io::Result<Vec<String>> {
     if n == 0 {
@@ -176,6 +200,15 @@ pub fn last_lines(path: &Path, n: usize) -> std::io::Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_decode_handles_spaces_escapes_and_junk() {
+        assert_eq!(url_decode("CI%20Watch"), "CI Watch");
+        assert_eq!(url_decode("CI+Watch"), "CI Watch");
+        assert_eq!(url_decode("caf%C3%A9"), "café");
+        assert_eq!(url_decode("100%"), "100%");
+        assert_eq!(url_decode("%zz%4"), "%zz%4");
+    }
 
     #[test]
     fn iso_formats_known_dates() {

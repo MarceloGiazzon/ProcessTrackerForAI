@@ -18,6 +18,23 @@ type CmdResult = Result<i32, String>;
 const RECENT_MS: u64 = 24 * 60 * 60 * 1000;
 const RECENT_MAX: usize = 15;
 
+/// What to tell an agent so it runs long commands through ptrack. Printed by
+/// `ptrack instructions` for pasting into AGENTS.md, CLAUDE.md, GEMINI.md, ...
+/// Plain ASCII, so it survives any shell redirection or file encoding.
+pub const AGENT_INSTRUCTIONS: &str = "## Long-running commands
+Run any command that may take more than ~30 seconds (builds, test suites, servers, downloads,
+migrations) through `ptrack`:
+- In the background: `ptrack run -d -l \"<short label>\" -- <command>`. It prints a job id.
+- To check progress cheaply: `ptrack status <id>` or `ptrack list`. They show the state and the
+  last output line, so there is no need to read the log.
+- To wait for the result: `ptrack wait <id> --timeout 600`. It exits with the job's exit code and
+  prints the last 20 lines only if the job failed.
+- In the foreground with little output: `ptrack run -q -- <command>`. It prints one summary line,
+  plus the last lines on failure.
+- To stop a job: `ptrack stop <id>`.
+- Add `--tag \"<tag>\"` to group related jobs; `ptrack list --tag \"<tag>\"` shows only those.
+";
+
 /// A job as JSON, with the state as it is right now and its duration.
 pub fn to_json(job: &Job) -> serde_json::Value {
     let mut shown = job.clone();

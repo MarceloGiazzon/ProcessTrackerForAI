@@ -19,7 +19,7 @@ use serde_json::json;
 use crate::commands::{self, Stopped};
 use crate::job;
 use crate::supervise::summary;
-use crate::util::{last_lines, random_token};
+use crate::util::{last_lines, random_token, url_decode};
 
 const PAGE: &str = include_str!("ui.html");
 const DEFAULT_PORT: u16 = 7381;
@@ -125,10 +125,24 @@ fn handle(mut stream: TcpStream, token: &str, hosts: &[String]) -> std::io::Resu
     match (req.method.as_str(), segments.as_slice()) {
         ("GET", ["jobs"]) => {
             let all = query_param(&req.query, "all").is_some_and(|v| v == "1");
-            let (jobs, total) = commands::visible_jobs(all, &commands::Filter::default());
+            let param = |k| {
+                query_param(&req.query, k)
+                    .map(url_decode)
+                    .filter(|v| !v.is_empty())
+            };
+            let (project, tag) = (param("project"), param("tag"));
+            let filter = commands::Filter {
+                cwd_prefix: None,
+                project: project.as_deref(),
+                tag: tag.as_deref(),
+            };
+            let (jobs, total) = commands::visible_jobs(all, &filter);
+            let (projects, tags) = projects_and_tags();
             let body = json!({
                 "jobs": jobs.iter().map(commands::to_json).collect::<Vec<_>>(),
                 "total": total,
+                "projects": projects,
+                "tags": tags,
                 "home": job::home().display().to_string(),
             });
             respond(&mut stream, 200, "application/json", &body.to_string())
@@ -170,6 +184,17 @@ fn handle(mut stream: TcpStream, token: &str, hosts: &[String]) -> std::io::Resu
         }
         _ => respond(&mut stream, 404, "text/plain", "not found"),
     }
+}
+
+/// Every project and tag among all jobs, sorted, for the dashboard's filters.
+fn projects_and_tags() -> (Vec<String>, Vec<String>) {
+    let mut projects = std::collections::BTreeSet::new();
+    let mut tags = std::collections::BTreeSet::new();
+    for j in job::list_all() {
+        projects.extend(j.project_name());
+        tags.extend(j.tag);
+    }
+    (projects.into_iter().collect(), tags.into_iter().collect())
 }
 
 fn query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
