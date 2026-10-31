@@ -181,6 +181,13 @@ or the **last 5000 lines**. A second menu chooses the format:
 
 Each job comes with its id, title, state, folder, start time and log path, followed by its output.
 
+The **search box** at the top (press `/` to jump to it, `Esc` to clear it) narrows the list as you
+type. Every word you type must appear in the job's id, command or label, project, tag, folder, agent,
+state or last output line, in any case. In logs that are open, the matches are highlighted (up to 500
+per log) and a count is shown. It does not look inside logs that are closed. Select all, Expand all,
+Copy, Download and the buttons below all work on the jobs the search leaves on screen. Jobs you
+ticked and then hid with a search stay ticked, but are not touched until they are shown again.
+
 To work on several jobs at once, tick them: **Pause**, **Resume**, **Stop** and **Rerun** buttons
 appear, each showing how many of the ticked jobs it applies to (for example `Stop (3)`). Jobs an
 action doesn't fit, such as pausing a finished job, are skipped and the message says how many. Stop

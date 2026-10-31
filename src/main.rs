@@ -34,7 +34,7 @@ USAGE
   ptrack prune [--days N] [--all]               delete finished jobs (default: older than 7 days)
   ptrack ui [--port N] [--no-open] [--job ID]   live dashboard in your browser (this computer only);
                                                 --job opens it on that job; reuses a running one;
-                                                tick jobs to copy or download their output
+                                                search and tick jobs to copy, download or stop them
   ptrack mcp [--allow-control]                  MCP server for AI agents (stdio); read-only unless
                                                 --allow-control (adds stop / pause / resume / rerun)
   ptrack hook install [--project] [--all] [--no-prompts]

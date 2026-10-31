@@ -671,6 +671,10 @@ fn dashboard_requires_token_and_local_host() {
             && page.contains("id=\"b-rerun\""),
         "batch action buttons are on the page"
     );
+    assert!(
+        page.contains("id=\"q\"") && page.contains("id=\"match-count\""),
+        "search box is on the page"
+    );
     let running = h.detach(LONG);
     sleep(Duration::from_millis(800));
     let act = |action: &str| {

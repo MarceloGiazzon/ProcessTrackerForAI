@@ -9,14 +9,14 @@
     --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --line: #e3e6ec;
     --running: #1d63d8; --paused: #b26a00; --passed: #1a7f45; --failed: #c4302b;
     --cancelled: #667085; --lost: #8a3ffc; --code-bg: #0f1420; --code-text: #d7dce6;
-    --btn: #eef1f5; --btn-hover: #e2e6ec;
+    --btn: #eef1f5; --btn-hover: #e2e6ec; --mark-bg: #f3c63f; --mark-text: #1d2330;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0f1218; --panel: #171b23; --text: #e6e9ef; --muted: #98a1b3; --line: #262c38;
       --running: #6aa4ff; --paused: #f0b04a; --passed: #4cc287; --failed: #ff6b63;
       --cancelled: #98a1b3; --lost: #b48cff; --code-bg: #0a0d13; --code-text: #d7dce6;
-      --btn: #232936; --btn-hover: #2d3444;
+      --btn: #232936; --btn-hover: #2d3444; --mark-bg: #d9a82b; --mark-text: #0f1218;
     }
   }
   * { box-sizing: border-box; }
@@ -79,6 +79,11 @@
     border: 1px solid var(--line); background: var(--btn); color: var(--text);
   }
   button:hover { background: var(--btn-hover); }
+  input[type=search] {
+    font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 7px; width: 200px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  mark { background: var(--mark-bg); color: var(--mark-text); border-radius: 2px; }
   select {
     font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 7px; max-width: 180px;
     border: 1px solid var(--line); background: var(--btn); color: var(--text);
@@ -116,6 +121,7 @@
   <h1>ptrack</h1>
   <span class="counts" id="counts"></span>
   <span class="spacer"></span>
+  <input type="search" id="q" placeholder="Search jobs…  ( / )" aria-label="Search jobs" autocomplete="off">
   <select id="project" aria-label="Filter by project"><option value="">All projects</option></select>
   <select id="tag" aria-label="Filter by tag" hidden><option value="">All tags</option></select>
   <label class="toggle"><input type="checkbox" id="all"> Show older jobs</label>
@@ -126,6 +132,7 @@
   <div class="bar" id="bar" hidden>
     <label><input type="checkbox" id="pick-all"> Select all</label>
     <span class="picked" id="picked"></span>
+    <span class="picked" id="match-count"></span>
     <span class="spacer"></span>
     <button id="expand" title="Open the output of every job on screen">Expand all</button>
     <button id="collapse" title="Close every open output">Collapse all</button>
@@ -287,7 +294,8 @@ function renderJob(j) {
   if (openJobs.has(j.id)) {
     if (!logs.has(j.id)) logs.set(j.id, { text: "", final: false, top: 0, stick: true });
     const view = logs.get(j.id);
-    const pre = el("pre", { "data-id": j.id }, view.text || "loading…");
+    const pre = el("pre", { "data-id": j.id });
+    if (view.text) fillLog(pre, view.text, searchTerms()); else pre.textContent = "loading…";
     card.append(el("div", { class: "log" },
       el("div", { class: "log-head" }, el("span", {}, "Last 200 lines"), el("code", {}, j.log_path)),
       pre));
@@ -297,8 +305,9 @@ function renderJob(j) {
       Object.assign(view, { text: text || "(no output yet)", final: !active });
       const live = logPanel(j.id);
       if (!live) return;
-      live.textContent = view.text;
+      fillLog(live, view.text, searchTerms());
       live.scrollTop = view.stick ? live.scrollHeight : view.top;
+      updateMatchCount();
     });
   }
   return card;
@@ -338,7 +347,10 @@ function updateBar() {
   const all = $("pick-all");
   all.checked = shown.length > 0 && n === shown.length;
   all.indeterminate = n > 0 && n < shown.length;
-  $("picked").textContent = n ? n + " of " + shown.length + " selected" : "";
+  const hiddenTicks = selected.size - n;   // ticked, but hidden by the search
+  $("picked").textContent = n || hiddenTicks
+    ? n + " of " + shown.length + " selected" + (hiddenTicks ? " (" + hiddenTicks + " hidden by search)" : "")
+    : "";
   $("copy").disabled = $("download").disabled = n === 0;
   $("expand").disabled = shown.every((j) => openJobs.has(j.id));
   $("collapse").disabled = openJobs.size === 0;
@@ -605,25 +617,8 @@ async function refresh() {
     notifyFinished(data.jobs);
     fillSelect("project", "All projects", data.projects || [], filters.project);
     fillSelect("tag", "All tags", data.tags || [], filters.tag);
-    const running = data.jobs.filter((j) => j.state === "running").length;
-    const paused = data.jobs.filter((j) => j.state === "paused").length;
-    $("counts").textContent = running + " running" + (paused ? ", " + paused + " paused" : "");
-    document.title = (running ? "(" + running + ") " : "") + "ptrack jobs";
-    const list = data.jobs.length
-      ? data.jobs.map(renderJob)
-      : filters.project || filters.tag
-        ? [el("div", { class: "notice" }, "No jobs match this project or tag. Choose \"All\" in the filters to see every job.")]
-        : [el("div", { class: "notice" }, "No jobs yet. Start one with: ", el("code", {}, "ptrack run -d -- <command>"))];
-    shown = data.jobs;
-    // Forget ticks on jobs that are no longer listed (filtered out or pruned),
-    // so Copy / Download never include something the user can't see.
-    for (const id of [...selected]) if (!shown.some((j) => j.id === id)) selected.delete(id);
-    rememberLogScroll();
-    $("jobs").replaceChildren(...list);
-    restoreLogScroll();
-    updateBar();
-    const hidden = data.total - data.jobs.length;
-    $("footer").textContent = (hidden > 0 ? hidden + " older job(s) hidden · " : "") + "Data folder: " + data.home;
+    lastData = data;
+    render(data);
     $("live").classList.remove("off");
     $("live-text").textContent = "live";
   } catch (e) {
@@ -634,6 +629,97 @@ async function refresh() {
     inFlight = false;
   }
 }
+
+let lastData = null;   // the last answer from the server, so typing can redraw without a request
+
+// Draws the page from the server's answer. Search narrows `shown` here, so Select all,
+// Expand all, Copy, Download and the batch actions all follow it.
+function render(data) {
+  const terms = searchTerms();
+  const visible = terms.length ? data.jobs.filter((j) => matches(j, terms)) : data.jobs;
+  const running = data.jobs.filter((j) => j.state === "running").length;
+  const paused = data.jobs.filter((j) => j.state === "paused").length;
+  // The counts describe every listed job, so a running job hidden by a search isn't forgotten.
+  $("counts").textContent = running + " running" + (paused ? ", " + paused + " paused" : "")
+    + (terms.length ? " · " + visible.length + " of " + data.jobs.length + " shown" : "");
+  document.title = (running ? "(" + running + ") " : "") + "ptrack jobs";
+  shown = visible;
+  // Forget ticks on jobs that are no longer listed (filtered out or pruned), so Copy /
+  // Download never include a job that isn't there. A search only hides ticked jobs.
+  for (const id of [...selected]) if (!data.jobs.some((j) => j.id === id)) selected.delete(id);
+  const list = !data.jobs.length
+    ? filters.project || filters.tag
+      ? [el("div", { class: "notice" }, "No jobs match this project or tag. Choose \"All\" in the filters to see every job.")]
+      : [el("div", { class: "notice" }, "No jobs yet. Start one with: ", el("code", {}, "ptrack run -d -- <command>"))]
+    : !visible.length
+      ? [el("div", { class: "notice" }, "No jobs match \"" + terms.join(" ") + "\". Clear the search to see all.")]
+      : visible.map(renderJob);
+  rememberLogScroll();
+  $("jobs").replaceChildren(...list);
+  restoreLogScroll();
+  updateBar();
+  updateMatchCount();
+  const hidden = data.total - data.jobs.length;
+  $("footer").textContent = (hidden > 0 ? hidden + " older job(s) hidden · " : "") + "Data folder: " + data.home;
+}
+
+// Search: every space-separated word must appear somewhere in the job's details
+// or its last line. Words are case-insensitive. Open logs get their matches highlighted.
+const MAX_MARKS = 500;   // per log, to keep a huge log responsive
+
+function searchTerms() {
+  return $("q").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function matches(j, terms) {
+  const hay = [j.id, title(j), j.project, j.tag, j.cwd, j.agent, j.state, j.last_line]
+    .filter(Boolean).join("\n").toLowerCase();
+  return terms.every((t) => hay.includes(t));
+}
+
+// Fills a log panel with its text, wrapping matches in <mark>. Built from text nodes
+// only, never innerHTML, because log lines and search words are untrusted text.
+function fillLog(pre, text, terms) {
+  if (!terms.length) { pre.textContent = text; return; }
+  const escape = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(terms.map(escape).join("|"), "gi");
+  const parts = [];
+  let last = 0, marks = 0, m;
+  while (marks < MAX_MARKS && (m = re.exec(text))) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    parts.push(el("mark", {}, m[0]));
+    last = m.index + m[0].length;
+    marks++;
+  }
+  parts.push(text.slice(last));
+  pre.replaceChildren(...parts);
+}
+
+function updateMatchCount() {
+  const total = document.querySelectorAll("pre[data-id] mark").length;
+  const logsWith = [...document.querySelectorAll("pre[data-id]")].filter((p) => p.querySelector("mark")).length;
+  $("match-count").textContent = searchTerms().length && openJobs.size
+    ? total + " match" + (total === 1 ? "" : "es") + " in " + logsWith + " open log" + (logsWith === 1 ? "" : "s")
+    : "";
+}
+
+let searchTimer = null;
+$("q").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { if (lastData) render(lastData); }, 150);
+});
+$("q").addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  e.target.value = "";
+  if (lastData) render(lastData);
+});
+document.addEventListener("keydown", (e) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if (e.key === "/" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    $("q").focus();
+  }
+});
 
 // Rebuilds a filter's options only when the list changed, so the periodic
 // refresh doesn't close a dropdown the user has open.
