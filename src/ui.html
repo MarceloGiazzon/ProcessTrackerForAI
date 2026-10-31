@@ -20,6 +20,8 @@
     }
   }
   * { box-sizing: border-box; }
+  /* Author display rules (flex, grid) would otherwise win over the hidden attribute. */
+  [hidden] { display: none !important; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -53,6 +55,7 @@
   }
   .bar label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
   .bar .picked { color: var(--muted); }
+  .bar-actions { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .row:hover { background: color-mix(in srgb, var(--btn) 50%, transparent); }
   .badge {
     display: inline-block; text-align: center; font-size: 12px; font-weight: 600;
@@ -137,6 +140,12 @@
     </select>
     <button id="copy" title="Copy the details and output of the selected jobs, like Ctrl+C">Copy selected</button>
     <button id="download" title="Merge the selected jobs into one text file and download it">Download selected</button>
+    <div class="bar-actions" id="batch" hidden>
+      <button id="b-pause" title="Pause the selected jobs that are running">Pause</button>
+      <button id="b-resume" title="Resume the selected jobs that are paused">Resume</button>
+      <button id="b-stop" class="danger" title="Stop the selected jobs that are running or paused">Stop</button>
+      <button id="b-rerun" title="Run the selected finished jobs again, each in its own folder">Rerun</button>
+    </div>
   </div>
   <div id="jobs"></div>
   <footer id="footer"></footer>
@@ -209,17 +218,22 @@ function toast(msg) {
   toast.timer = setTimeout(() => t.classList.remove("show"), 3500);
 }
 
+// Asks ptrack to pause / resume / stop / rerun one job. Never throws.
+async function request(job, action) {
+  try {
+    const r = await api("/api/jobs/" + job.id + "/" + action, { method: "POST" });
+    const body = await r.json();
+    return { ok: !!body.ok, message: body.message };
+  } catch (e) {
+    return { ok: false, message: "Could not reach ptrack: " + e.message };
+  }
+}
+
 async function act(job, action, button) {
   if (action === "stop" && !confirm("Stop job " + job.id + " and everything it started?")) return;
   if (action === "rerun" && !confirm("Run this again in " + job.cwd + "?\n\n" + title(job))) return;
   button.disabled = true;
-  try {
-    const r = await api("/api/jobs/" + job.id + "/" + action, { method: "POST" });
-    const body = await r.json();
-    toast(body.message);
-  } catch (e) {
-    toast("Could not reach ptrack: " + e.message);
-  }
+  toast((await request(job, action)).message);
   refresh();
 }
 
@@ -328,7 +342,74 @@ function updateBar() {
   $("copy").disabled = $("download").disabled = n === 0;
   $("expand").disabled = shown.every((j) => openJobs.has(j.id));
   $("collapse").disabled = openJobs.size === 0;
+  // One button per action, counting only the ticked jobs it applies to.
+  let any = 0;
+  for (const [action, spec] of Object.entries(BATCH)) {
+    const count = shown.filter((j) => selected.has(j.id) && spec.applies(j)).length;
+    const button = $("b-" + action);
+    button.textContent = spec.label + " (" + count + ")";
+    button.hidden = count === 0;
+    button.disabled = batchBusy;
+    any += count;
+  }
+  $("batch").hidden = any === 0;
 }
+
+// Actions on the ticked jobs. Each job gets the same request its own button
+// sends, so the single-writer rule is untouched. Jobs an action doesn't fit
+// (pausing a finished job) are skipped, not treated as errors.
+const isActive = (j) => j.state === "running" || j.state === "paused";
+const BATCH = {
+  pause: { label: "Pause", done: "Paused", why: "not running", applies: (j) => j.state === "running" },
+  resume: { label: "Resume", done: "Resumed", why: "not paused", applies: (j) => j.state === "paused" },
+  stop: {
+    label: "Stop", done: "Stopped", why: "already finished", applies: isActive,
+    confirm: (n) => "Stop " + plural(n) + " and everything they started?",
+  },
+  rerun: {
+    label: "Rerun", done: "Restarted", why: "still running", applies: (j) => !isActive(j),
+    confirm: (n) => "Run " + plural(n) + " again, each in its own folder?",
+  },
+};
+let batchBusy = false;
+
+function plural(n) {
+  return n + " job" + (n === 1 ? "" : "s");
+}
+
+function jobList(jobs) {
+  const lines = jobs.slice(0, 10).map((j) => "#" + j.id + "  " + title(j).slice(0, 70));
+  if (jobs.length > 10) lines.push("…and " + (jobs.length - 10) + " more");
+  return lines.join("\n");
+}
+
+async function batch(action) {
+  if (batchBusy) return;
+  const spec = BATCH[action];
+  const picked = shown.filter((j) => selected.has(j.id));
+  const jobs = picked.filter(spec.applies);
+  if (!jobs.length) return;
+  if (spec.confirm && !confirm(spec.confirm(jobs.length) + "\n\n" + jobList(jobs))) return;
+  batchBusy = true;
+  updateBar();
+  try {
+    const results = await Promise.all(jobs.map((j) => request(j, action)));
+    const failed = results.filter((r) => !r.ok);
+    const skipped = picked.length - jobs.length;
+    toast(
+      (failed.length
+        ? spec.done + " " + (jobs.length - failed.length) + " of " + plural(jobs.length) + ". First error: " + failed[0].message
+        : spec.done + " " + plural(jobs.length))
+      + (skipped ? ", skipped " + skipped + " (" + spec.why + ")" : "") + ".");
+    // A second click on Rerun would start every job again.
+    if (action === "rerun" && failed.length < jobs.length) selected.clear();
+  } finally {
+    batchBusy = false;
+    refresh();
+  }
+}
+
+for (const action of Object.keys(BATCH)) $("b-" + action).addEventListener("click", () => batch(action));
 
 $("expand").addEventListener("click", () => {
   const closed = shown.filter((j) => !openJobs.has(j.id));

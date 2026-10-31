@@ -181,6 +181,13 @@ or the **last 5000 lines**. A second menu chooses the format:
 
 Each job comes with its id, title, state, folder, start time and log path, followed by its output.
 
+To work on several jobs at once, tick them: **Pause**, **Resume**, **Stop** and **Rerun** buttons
+appear, each showing how many of the ticked jobs it applies to (for example `Stop (3)`). Jobs an
+action doesn't fit, such as pausing a finished job, are skipped and the message says how many. Stop
+and Rerun ask for confirmation first. Only jobs you can see are affected: ticked jobs hidden by a
+filter are left alone. After Rerun the ticks are cleared, so a second click doesn't start everything
+again.
+
 ## Notifications when a job ends
 
 ```sh

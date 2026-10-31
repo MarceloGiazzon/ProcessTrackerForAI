@@ -663,6 +663,32 @@ fn dashboard_requires_token_and_local_host() {
     assert_eq!(code, 200, "{body}");
     assert!(body.contains("rerun of"), "{body}");
 
+    // The batch buttons send these same per-job requests, one for each ticked job.
+    assert!(
+        page.contains("id=\"b-pause\"")
+            && page.contains("id=\"b-resume\"")
+            && page.contains("id=\"b-stop\"")
+            && page.contains("id=\"b-rerun\""),
+        "batch action buttons are on the page"
+    );
+    let running = h.detach(LONG);
+    sleep(Duration::from_millis(800));
+    let act = |action: &str| {
+        http(
+            "POST",
+            &format!("/api/jobs/{running}/{action}"),
+            &host,
+            &token,
+        )
+    };
+    assert_eq!(act("pause").0, 200);
+    assert_eq!(h.state(&running), "paused");
+    assert_eq!(act("resume").0, 200);
+    assert_eq!(h.state(&running), "running");
+    assert_eq!(act("stop").0, 200);
+    assert_eq!(h.state(&running), "cancelled");
+    assert_eq!(act("pause").0, 409, "a finished job cannot be paused");
+
     let _ = child.kill();
     let _ = child.wait();
 }
