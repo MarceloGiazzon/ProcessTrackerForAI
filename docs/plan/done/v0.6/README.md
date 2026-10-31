@@ -1,10 +1,10 @@
-# Implementation plan: v0.6 dashboard improvements
+# Implementation plan: v0.6 dashboard improvements (done: released as v0.6.0 on 2026-10-30)
 
 This plan is for the AI coding tool that will implement the next dashboard features of `ptrack`.
 Follow it one phase at a time. When something here seems unclear or wrong, stop and ask the owner
 instead of guessing.
 
-**Before anything else, read [`AGENTS.md`](../../../AGENTS.md) in the repository root.** Its rules
+**Before anything else, read [`AGENTS.md`](../../../../AGENTS.md) in the repository root.** Its rules
 apply to every step below. The ones that matter most here:
 
 - **No new dependencies.** Everything below is plain browser JavaScript plus the standard library.

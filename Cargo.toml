@@ -1,6 +1,6 @@
 [package]
 name = "process-tracker-for-ai"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.87"
 description = "See and control the long-running processes your AI coding agents start: what is running, who started it, since when, how it ended."
