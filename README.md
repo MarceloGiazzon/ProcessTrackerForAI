@@ -165,6 +165,12 @@ This works only while the page is open. The first time, the browser asks for per
 and **tag** menus at the top show only the jobs of one project or tag; the page remembers your
 choice.
 
+You can open the output of several jobs at the same time. Each job also has a checkbox, and
+**Select all** at the top ticks or clears every job on screen. **Copy selected** puts the details
+and output of the ticked jobs on your clipboard (as if you had pressed Ctrl+C), and **Download
+selected** merges them into one `.txt` file. Each job starts with a short header (id, command, state,
+folder, start time, log path), followed by its output (the last 5000 lines at most).
+
 ## Notifications when a job ends
 
 ```sh

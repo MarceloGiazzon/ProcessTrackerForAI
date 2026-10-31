@@ -579,6 +579,12 @@ fn dashboard_requires_token_and_local_host() {
         page.contains("id=\"notify\""),
         "notification toggle is on the page"
     );
+    assert!(
+        page.contains("id=\"pick-all\"")
+            && page.contains("id=\"copy\"")
+            && page.contains("id=\"download\""),
+        "select all, copy and download are on the page"
+    );
     assert_eq!(http("GET", "/api/jobs", &host, "").0, 401);
     assert_eq!(http("GET", "/api/jobs", &host, "wrong").0, 401);
     assert_eq!(

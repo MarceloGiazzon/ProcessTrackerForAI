@@ -42,9 +42,17 @@
     margin-bottom: 10px; overflow: hidden;
   }
   .row {
-    display: grid; grid-template-columns: 96px 1fr auto; gap: 4px 14px; align-items: center;
+    display: grid; grid-template-columns: 18px 96px 1fr auto; gap: 4px 14px; align-items: center;
     padding: 12px 14px; cursor: pointer;
   }
+  .row input[type=checkbox], .bar input[type=checkbox] { width: 16px; height: 16px; margin: 0; cursor: pointer; }
+  .job.selected { border-color: var(--running); }
+  .bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 10px;
+    padding: 8px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .bar label { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+  .bar .picked { color: var(--muted); }
   .row:hover { background: color-mix(in srgb, var(--btn) 50%, transparent); }
   .badge {
     display: inline-block; text-align: center; font-size: 12px; font-weight: 600;
@@ -59,7 +67,7 @@
   }
   .meta { color: var(--muted); font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .last {
-    grid-column: 2 / 4; color: var(--muted); font: 12.5px/1.4 ui-monospace, Consolas, monospace;
+    grid-column: 3 / 5; color: var(--muted); font: 12.5px/1.4 ui-monospace, Consolas, monospace;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .actions { display: flex; gap: 6px; }
@@ -92,11 +100,11 @@
   footer { color: var(--muted); font-size: 12px; margin-top: 18px; overflow-wrap: anywhere; }
   @media (max-width: 640px) {
     header, main { padding-left: 16px; padding-right: 16px; }
-    .row { grid-template-columns: 1fr auto; }
+    .row { grid-template-columns: 18px 1fr auto; }
     .row .badge { justify-self: start; }
-    .row > .info { grid-column: 1 / 3; }
-    .last { grid-column: 1 / 3; }
-    .actions { grid-column: 2; grid-row: 1; }
+    .row > .info { grid-column: 1 / 4; }
+    .last { grid-column: 1 / 4; }
+    .actions { grid-column: 3; grid-row: 1; }
   }
 </style>
 </head>
@@ -112,6 +120,13 @@
   <span class="live" id="live"><span class="dot"></span><span id="live-text">live</span></span>
 </header>
 <main>
+  <div class="bar" id="bar" hidden>
+    <label><input type="checkbox" id="pick-all"> Select all</label>
+    <span class="picked" id="picked"></span>
+    <span class="spacer"></span>
+    <button id="copy" title="Copy the details and output of the selected jobs, like Ctrl+C">Copy selected</button>
+    <button id="download" title="Merge the selected jobs into one text file and download it">Download selected</button>
+  </div>
   <div id="jobs"></div>
   <footer id="footer"></footer>
 </main>
@@ -121,7 +136,11 @@
 const params = new URLSearchParams(location.hash.slice(1));
 const token = params.get("t") || "";
 const $ = (id) => document.getElementById(id);
-let openJob = params.get("job");
+// Several jobs can be open at once; each keeps its own log panel state.
+const openJobs = new Set(params.get("job") ? [params.get("job")] : []);
+const logs = new Map();   // job id -> { text, final, top, stick }
+const selected = new Set();   // job ids ticked for Copy / Download
+let shown = [];   // jobs on screen now, in order
 let showAll = false;
 try { showAll = localStorage.getItem("ptrack.all") === "1"; } catch (e) {}
 $("all").checked = showAll;
@@ -129,7 +148,7 @@ $("all").checked = showAll;
 // A link to one job (`ptrack ui --job ID`) ignores them, so that job is shown.
 const filters = { project: "", tag: "" };
 try {
-  if (!openJob) {
+  if (!openJobs.size) {
     filters.project = localStorage.getItem("ptrack.project") || "";
     filters.tag = localStorage.getItem("ptrack.tag") || "";
   }
@@ -210,43 +229,163 @@ function renderJob(j) {
     actions.append(el("button", { onclick: (e) => { e.stopPropagation(); act(j, "rerun", e.target); } }, "Rerun"));
   }
   const toggle = () => {
-    openJob = openJob === j.id ? null : j.id;
-    logView = { id: null, text: "", final: false, top: 0, stick: true };
+    if (openJobs.delete(j.id)) logs.delete(j.id);
+    else openJobs.add(j.id);
     refresh();
   };
+  const check = el("input", {
+    type: "checkbox", "aria-label": "Select job " + j.id,
+    onclick: (e) => e.stopPropagation(),
+    onchange: (e) => { setSelected(j.id, e.target.checked); e.target.closest(".job").classList.toggle("selected", e.target.checked); },
+  });
+  check.checked = selected.has(j.id);
   const row = el("div", { class: "row", onclick: toggle },
+    check,
     el("span", { class: "badge", style: "--state: var(--" + j.state + ")" }, j.state),
     el("div", { class: "info" }, el("div", { class: "title", title: title(j) }, j.tag ? el("span", { class: "tag" }, j.tag) : null, title(j)), meta),
     actions,
     j.last_line ? el("div", { class: "last", title: j.last_line }, j.last_line) : null,
   );
-  const card = el("div", { class: "job" }, row);
-  if (openJob === j.id) {
-    const pre = el("pre", { id: "log" }, logView.id === j.id ? logView.text : "loading…");
+  const card = el("div", { class: "job" + (selected.has(j.id) ? " selected" : "") }, row);
+  if (openJobs.has(j.id)) {
+    if (!logs.has(j.id)) logs.set(j.id, { text: "", final: false, top: 0, stick: true });
+    const view = logs.get(j.id);
+    const pre = el("pre", { "data-id": j.id }, view.text || "loading…");
     card.append(el("div", { class: "log" },
       el("div", { class: "log-head" }, el("span", {}, "Last 200 lines"), el("code", {}, j.log_path)),
       pre));
-    if (logView.id === j.id && active === false && logView.final) return card;
+    if (view.final) return card;
     api("/api/jobs/" + j.id + "/log?lines=200").then((r) => r.text()).then((text) => {
-      logView = { id: j.id, text: text || "(no output yet)", final: !active, top: logView.top, stick: logView.stick };
-      const live = $("log");
+      if (!logs.has(j.id)) return;   // closed while loading
+      Object.assign(view, { text: text || "(no output yet)", final: !active });
+      const live = logPanel(j.id);
       if (!live) return;
-      live.textContent = logView.text;
-      live.scrollTop = logView.stick ? live.scrollHeight : logView.top;
+      live.textContent = view.text;
+      live.scrollTop = view.stick ? live.scrollHeight : view.top;
     });
   }
   return card;
 }
 
+function logPanel(id) {
+  return [...document.querySelectorAll("pre[data-id]")].find((p) => p.dataset.id === id);
+}
+
 // Log panel state survives the periodic redraw: text, and scroll position
 // (sticks to the bottom unless the reader scrolled up).
-let logView = { id: null, text: "", final: false, top: 0, stick: true };
 function rememberLogScroll() {
-  const pre = $("log");
-  if (!pre) { logView.stick = true; return; }
-  logView.top = pre.scrollTop;
-  logView.stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+  for (const pre of document.querySelectorAll("pre[data-id]")) {
+    const view = logs.get(pre.dataset.id);
+    if (!view) continue;
+    view.top = pre.scrollTop;
+    view.stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+  }
 }
+
+function restoreLogScroll() {
+  for (const pre of document.querySelectorAll("pre[data-id]")) {
+    const view = logs.get(pre.dataset.id);
+    if (view) pre.scrollTop = view.stick ? pre.scrollHeight : view.top;
+  }
+}
+
+// Selection: the bar's "Select all" covers the jobs on screen.
+function setSelected(id, on) {
+  if (on) selected.add(id); else selected.delete(id);
+  updateBar();
+}
+
+function updateBar() {
+  const n = shown.filter((j) => selected.has(j.id)).length;
+  $("bar").hidden = shown.length === 0;
+  const all = $("pick-all");
+  all.checked = shown.length > 0 && n === shown.length;
+  all.indeterminate = n > 0 && n < shown.length;
+  $("picked").textContent = n ? n + " of " + shown.length + " selected" : "";
+  $("copy").disabled = $("download").disabled = n === 0;
+}
+
+$("pick-all").addEventListener("change", (e) => {
+  for (const j of shown) {
+    if (e.target.checked) selected.add(j.id); else selected.delete(j.id);
+  }
+  for (const card of document.querySelectorAll(".job")) {
+    const box = card.querySelector(".row input[type=checkbox]");
+    if (box) { box.checked = e.target.checked; card.classList.toggle("selected", e.target.checked); }
+  }
+  updateBar();
+});
+
+// One text for the selected jobs: a short header per job, then its output
+// (up to the last 5000 lines, the most the dashboard's server returns).
+async function selectedText() {
+  const picked = shown.filter((j) => selected.has(j.id));
+  const parts = await Promise.all(picked.map(async (j) => {
+    let text = "(log unavailable)";
+    try {
+      const r = await api("/api/jobs/" + j.id + "/log?lines=5000");
+      if (r.ok) text = (await r.text()) || "(no output)";
+    } catch (e) {}
+    return [
+      "=== job " + j.id + ": " + title(j) + " ===",
+      "state: " + j.state + (j.exit_code != null ? " (exit " + j.exit_code + ")" : "") + " · took " + dur(j.duration_ms),
+      "folder: " + j.cwd,
+      "started: " + new Date(j.started_ms).toISOString(),
+      "log: " + j.log_path,
+      "",
+      text,
+    ].join("\n");
+  }));
+  return parts.join("\n\n") + "\n";
+}
+
+async function copyText(textPromise) {
+  // Safari only allows the copy if it starts inside the click, so hand it the promise.
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/plain": textPromise.then((t) => new Blob([t], { type: "text/plain" })),
+      })]);
+      return;
+    } catch (e) {}
+  }
+  const text = await textPromise;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const area = el("textarea", { style: "position:fixed;opacity:0" });
+    area.value = text;
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    if (!ok) throw new Error("the browser refused to copy");
+  }
+}
+
+$("copy").addEventListener("click", async () => {
+  const count = shown.filter((j) => selected.has(j.id)).length;
+  try {
+    await copyText(selectedText());
+    toast("Copied " + count + " job" + (count === 1 ? "" : "s") + " to the clipboard.");
+  } catch (e) {
+    toast("Could not copy: " + e.message);
+  }
+});
+
+$("download").addEventListener("click", async () => {
+  const count = shown.filter((j) => selected.has(j.id)).length;
+  const text = await selectedText();
+  const link = el("a", {
+    href: URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" })),
+    download: "ptrack-jobs-" + new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-") + ".txt",
+  });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+  toast("Downloaded " + count + " job" + (count === 1 ? "" : "s") + ".");
+});
 
 let inFlight = false;
 async function refresh() {
@@ -277,10 +416,14 @@ async function refresh() {
       : filters.project || filters.tag
         ? [el("div", { class: "notice" }, "No jobs match this project or tag. Choose \"All\" in the filters to see every job.")]
         : [el("div", { class: "notice" }, "No jobs yet. Start one with: ", el("code", {}, "ptrack run -d -- <command>"))];
+    shown = data.jobs;
+    // Forget ticks on jobs that are no longer listed (filtered out or pruned),
+    // so Copy / Download never include something the user can't see.
+    for (const id of [...selected]) if (!shown.some((j) => j.id === id)) selected.delete(id);
     rememberLogScroll();
     $("jobs").replaceChildren(...list);
-    const pre = $("log");
-    if (pre && logView.id === openJob) pre.scrollTop = logView.stick ? pre.scrollHeight : logView.top;
+    restoreLogScroll();
+    updateBar();
     const hidden = data.total - data.jobs.length;
     $("footer").textContent = (hidden > 0 ? hidden + " older job(s) hidden · " : "") + "Data folder: " + data.home;
     $("live").classList.remove("off");
@@ -356,7 +499,7 @@ function notifyFinished(jobs) {
         + (j.exit_code != null ? " · exit " + j.exit_code : "")
         + (j.last_line ? "\n" + j.last_line : "");
       const n = new Notification(title(j) + ": " + j.state, { body: body, tag: "ptrack-" + j.id });
-      n.onclick = () => { window.focus(); openJob = j.id; refresh(); n.close(); };
+      n.onclick = () => { window.focus(); openJobs.add(j.id); refresh(); n.close(); };
     }
     seenStates.set(j.id, j.state);
   }
