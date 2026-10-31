@@ -29,7 +29,10 @@ try {
     $zip = Join-Path $work $name
     Invoke-WebRequest $url -OutFile $zip
     try {
-        $expected = ((Invoke-WebRequest "$url.sha256").Content.ToString().Trim() -split '\s+')[0]
+        $sum = (Invoke-WebRequest "$url.sha256").Content
+        # PowerShell 7 returns this download as bytes, Windows PowerShell 5 as text.
+        if ($sum -is [byte[]]) { $sum = [Text.Encoding]::UTF8.GetString($sum) }
+        $expected = ($sum.ToString().Trim() -split '\s+')[0]
         $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
         if ($expected -ne $actual) { throw "checksum mismatch; the download may be corrupted" }
     } catch [System.Net.WebException] { }
