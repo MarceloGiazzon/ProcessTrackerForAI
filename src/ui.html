@@ -124,6 +124,8 @@
     <label><input type="checkbox" id="pick-all"> Select all</label>
     <span class="picked" id="picked"></span>
     <span class="spacer"></span>
+    <button id="expand" title="Open the output of every job on screen">Expand all</button>
+    <button id="collapse" title="Close every open output">Collapse all</button>
     <button id="copy" title="Copy the details and output of the selected jobs, like Ctrl+C">Copy selected</button>
     <button id="download" title="Merge the selected jobs into one text file and download it">Download selected</button>
   </div>
@@ -140,6 +142,9 @@ const $ = (id) => document.getElementById(id);
 const openJobs = new Set(params.get("job") ? [params.get("job")] : []);
 const logs = new Map();   // job id -> { text, final, top, stick }
 const selected = new Set();   // job ids ticked for Copy / Download
+// Each open job that is still running re-reads its log every refresh, so
+// "Expand all" stops at this many.
+const MAX_EXPAND = 20;
 let shown = [];   // jobs on screen now, in order
 let showAll = false;
 try { showAll = localStorage.getItem("ptrack.all") === "1"; } catch (e) {}
@@ -303,7 +308,23 @@ function updateBar() {
   all.indeterminate = n > 0 && n < shown.length;
   $("picked").textContent = n ? n + " of " + shown.length + " selected" : "";
   $("copy").disabled = $("download").disabled = n === 0;
+  $("expand").disabled = shown.every((j) => openJobs.has(j.id));
+  $("collapse").disabled = openJobs.size === 0;
 }
+
+$("expand").addEventListener("click", () => {
+  const closed = shown.filter((j) => !openJobs.has(j.id));
+  for (const j of closed.slice(0, MAX_EXPAND)) openJobs.add(j.id);
+  if (closed.length > MAX_EXPAND) toast("Opened the first " + MAX_EXPAND + " of " + closed.length + " closed jobs.");
+  refresh();
+});
+
+// Also closes jobs that a filter hides, so nothing stays open out of sight.
+$("collapse").addEventListener("click", () => {
+  openJobs.clear();
+  logs.clear();
+  refresh();
+});
 
 $("pick-all").addEventListener("change", (e) => {
   for (const j of shown) {
