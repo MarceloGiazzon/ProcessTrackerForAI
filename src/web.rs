@@ -25,10 +25,13 @@ use crate::commands::{self, Stopped};
 use crate::job;
 use crate::platform;
 use crate::supervise::summary;
-use crate::util::{last_lines, random_token, url_decode};
+use crate::util::{last_lines, random_token, tail_bytes, url_decode};
 
 const PAGE: &str = include_str!("ui.html");
 const DEFAULT_PORT: u16 = 7381;
+/// Most of one log that Copy / Download can fetch. Page and server hold it all in
+/// memory, and a log can be many gigabytes.
+const EXPORT_LOG_LIMIT: u64 = 32 * 1024 * 1024;
 
 /// Serves the dashboard. `focus`: a job id to open the page on.
 /// Without `--port`, a dashboard that is already running is reused.
@@ -171,6 +174,20 @@ fn handle(mut stream: TcpStream, token: &str, hosts: &[String]) -> std::io::Resu
             respond(&mut stream, 200, "application/json", &body.to_string())
         }
         ("GET", ["jobs", id, "log"]) => match job::resolve(Some(id)) {
+            // `lines=all`: the whole log for Copy / Download, bounded by size.
+            Ok(j) if query_param(&req.query, "lines") == Some("all") => {
+                match tail_bytes(Path::new(&j.log_path), EXPORT_LOG_LIMIT) {
+                    Ok((text, cut)) => {
+                        let extra: &[(&str, &str)] = if cut {
+                            &[("X-Ptrack-Truncated", "1")]
+                        } else {
+                            &[]
+                        };
+                        respond_with(&mut stream, 200, "text/plain; charset=utf-8", extra, &text)
+                    }
+                    Err(e) => respond(&mut stream, 404, "text/plain", &e.to_string()),
+                }
+            }
             Ok(j) => {
                 let n = query_param(&req.query, "lines")
                     .and_then(|v| v.parse().ok())
@@ -238,6 +255,17 @@ fn respond(
     content_type: &str,
     body: &str,
 ) -> std::io::Result<()> {
+    respond_with(stream, code, content_type, &[], body)
+}
+
+/// Like `respond`, with extra response headers (name, value).
+fn respond_with(
+    stream: &mut TcpStream,
+    code: u16,
+    content_type: &str,
+    extra: &[(&str, &str)],
+    body: &str,
+) -> std::io::Result<()> {
     let reason = match code {
         200 => "OK",
         401 => "Unauthorized",
@@ -250,9 +278,13 @@ fn respond(
         stream,
         "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
          Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n\
-         Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n{body}",
+         Referrer-Policy: no-referrer\r\nConnection: close\r\n",
         body.len()
     )?;
+    for (name, value) in extra {
+        write!(stream, "{name}: {value}\r\n")?;
+    }
+    write!(stream, "\r\n{body}")?;
     stream.flush()
 }
 

@@ -126,6 +126,10 @@
     <span class="spacer"></span>
     <button id="expand" title="Open the output of every job on screen">Expand all</button>
     <button id="collapse" title="Close every open output">Collapse all</button>
+    <select id="scope" aria-label="How much output Copy and Download include">
+      <option value="all">Full log</option>
+      <option value="5000">Last 5000 lines</option>
+    </select>
     <button id="copy" title="Copy the details and output of the selected jobs, like Ctrl+C">Copy selected</button>
     <button id="download" title="Merge the selected jobs into one text file and download it">Download selected</button>
   </div>
@@ -149,6 +153,11 @@ let shown = [];   // jobs on screen now, in order
 let showAll = false;
 try { showAll = localStorage.getItem("ptrack.all") === "1"; } catch (e) {}
 $("all").checked = showAll;
+// How much of each log Copy / Download take, remembered like "Show older jobs".
+try { $("scope").value = localStorage.getItem("ptrack.scope") || "all"; } catch (e) {}
+$("scope").addEventListener("change", (e) => {
+  try { localStorage.setItem("ptrack.scope", e.target.value); } catch (err) {}
+});
 // Project and tag filters, remembered per browser like "Show older jobs".
 // A link to one job (`ptrack ui --job ID`) ignores them, so that job is shown.
 const filters = { project: "", tag: "" };
@@ -338,14 +347,19 @@ $("pick-all").addEventListener("change", (e) => {
 });
 
 // One text for the selected jobs: a short header per job, then its output
-// (up to the last 5000 lines, the most the dashboard's server returns).
+// (the whole log, or the last 5000 lines; the server sends at most the last 32 MB).
 async function selectedText() {
   const picked = shown.filter((j) => selected.has(j.id));
+  const lines = $("scope").value === "5000" ? "5000" : "all";
   const parts = await Promise.all(picked.map(async (j) => {
     let text = "(log unavailable)";
+    let note = null;
     try {
-      const r = await api("/api/jobs/" + j.id + "/log?lines=5000");
-      if (r.ok) text = (await r.text()) || "(no output)";
+      const r = await api("/api/jobs/" + j.id + "/log?lines=" + lines);
+      if (r.ok) {
+        text = (await r.text()) || "(no output)";
+        if (r.headers.get("X-Ptrack-Truncated") === "1") note = "(log truncated: only the last 32 MB are included)";
+      }
     } catch (e) {}
     return [
       "=== job " + j.id + ": " + title(j) + " ===",
@@ -353,6 +367,7 @@ async function selectedText() {
       "folder: " + j.cwd,
       "started: " + new Date(j.started_ms).toISOString(),
       "log: " + j.log_path,
+      ...(note ? [note] : []),
       "",
       text,
     ].join("\n");

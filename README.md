@@ -169,8 +169,10 @@ You can open the output of several jobs at the same time. **Expand all** opens e
 (at most 20 at once, so the page stays light) and **Collapse all** closes them. Each job also has a checkbox, and
 **Select all** at the top ticks or clears every job on screen. **Copy selected** puts the details
 and output of the ticked jobs on your clipboard (as if you had pressed Ctrl+C), and **Download
-selected** merges them into one `.txt` file. Each job starts with a short header (id, command, state,
-folder, start time, log path), followed by its output (the last 5000 lines at most).
+selected** merges them into one `.txt` file. The menu next to them chooses how much of each log to
+take: the **full log** (the default; for logs over 32 MB only the last 32 MB, and the file says so)
+or the **last 5000 lines**. Each job starts with a short header (id, command, state,
+folder, start time, log path), followed by its output.
 
 ## Notifications when a job ends
 

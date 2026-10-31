@@ -197,6 +197,32 @@ pub fn last_lines(path: &Path, n: usize) -> std::io::Result<Vec<String>> {
     Ok(lines[skip..].iter().map(|l| l.to_string()).collect())
 }
 
+/// The end of a file, at most `max_bytes` long, starting on a line boundary.
+/// The bool tells whether the start of the file was cut off. Bounded by bytes
+/// rather than lines, so a log of any size costs a known amount of memory.
+pub fn tail_bytes(path: &Path, max_bytes: u64) -> std::io::Result<(String, bool)> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut buf = Vec::new();
+    if len <= max_bytes {
+        file.read_to_end(&mut buf)?;
+        return Ok((String::from_utf8_lossy(&buf).into_owned(), false));
+    }
+    // Start one byte early: if it is a newline, the window already begins on a line.
+    file.seek(SeekFrom::Start(len - max_bytes - 1))?;
+    file.by_ref().take(max_bytes + 1).read_to_end(&mut buf)?;
+    let Some((&before, window)) = buf.split_first() else {
+        return Ok((String::new(), true));
+    };
+    let skip = if before == b'\n' {
+        0
+    } else {
+        // Drop the partial first line (it may also hold half of a multi-byte character).
+        window.iter().position(|&b| b == b'\n').map_or(0, |p| p + 1)
+    };
+    Ok((String::from_utf8_lossy(&window[skip..]).into_owned(), true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +262,38 @@ mod tests {
             Some("100% done")
         );
         assert_eq!(clean_line(b"   \r  "), None);
+    }
+
+    fn tail_of(content: &[u8], max: u64) -> (String, bool) {
+        let path = std::env::temp_dir().join(format!("ptrack-tail-{}.txt", new_id()));
+        std::fs::write(&path, content).unwrap();
+        let out = tail_bytes(&path, max).unwrap();
+        let _ = std::fs::remove_file(&path);
+        out
+    }
+
+    #[test]
+    fn tail_bytes_keeps_a_small_file_whole() {
+        assert_eq!(tail_of(b"a\nb\n", 100), ("a\nb\n".to_string(), false));
+        assert_eq!(tail_of(b"a\nb\n", 4), ("a\nb\n".to_string(), false));
+        assert_eq!(tail_of(b"", 10), (String::new(), false));
+    }
+
+    #[test]
+    fn tail_bytes_starts_on_a_whole_line() {
+        // 12 bytes; a window of 7 would start inside "bbbb".
+        assert_eq!(tail_of(b"aaaa\nbbbb\ncc\n", 7), ("cc\n".to_string(), true));
+        // The window begins exactly after a newline: that line is kept.
+        assert_eq!(tail_of(b"aaaa\nbbbb\n", 5), ("bbbb\n".to_string(), true));
+        // No newline inside the window: keep what there is.
+        assert_eq!(tail_of(b"abcdefghij", 4), ("ghij".to_string(), true));
+    }
+
+    #[test]
+    fn tail_bytes_does_not_split_a_multibyte_character() {
+        let (text, cut) = tail_of("é\nok\n".as_bytes(), 4);
+        assert_eq!((text.as_str(), cut), ("ok\n", true));
+        assert!(!text.contains('\u{fffd}'));
     }
 
     #[test]

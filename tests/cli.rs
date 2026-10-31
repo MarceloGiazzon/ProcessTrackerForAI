@@ -612,6 +612,46 @@ fn dashboard_requires_token_and_local_host() {
     assert_eq!(count("/api/jobs?tag=CI+Watch"), 1);
     assert_eq!(count("/api/jobs?tag=ci%20watch&project=npdev"), 1);
     assert_eq!(count("/api/jobs?project=elsewhere"), 0);
+
+    // Copy / Download can ask for the whole log; `lines=N` stays capped at 5000.
+    // The job has finished, so adding lines to its log here is safe.
+    let id = data["jobs"][0]["id"].as_str().unwrap().to_string();
+    let log_path = h.0.join("logs").join(format!("{id}.log"));
+    let mut log = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&log_path)
+        .unwrap();
+    for n in 0..6000 {
+        writeln!(log, "line {n}").unwrap();
+    }
+    drop(log);
+    let lines_of = |q: &str| {
+        let (code, body) = http(
+            "GET",
+            &format!("/api/jobs/{id}/log?lines={q}"),
+            &host,
+            &token,
+        );
+        assert_eq!(code, 200, "{body}");
+        body.lines().count()
+    };
+    assert_eq!(lines_of("5000"), 5000);
+    assert_eq!(lines_of("99999"), 5000);
+    assert_eq!(
+        lines_of("all"),
+        6001,
+        "the 6000 new lines plus the job's own"
+    );
+    let (_, whole) = http("GET", &format!("/api/jobs/{id}/log?lines=all"), &host, "");
+    assert!(
+        !whole.contains("line 5999"),
+        "the full log needs the token too"
+    );
+    assert!(
+        page.contains("id=\"scope\""),
+        "output scope menu is on the page"
+    );
+
     assert_eq!(http("POST", "/api/jobs/last/resume", &host, &token).0, 409);
     let (code, body) = http("POST", "/api/jobs/last/rerun", &host, &token);
     assert_eq!(code, 200, "{body}");
