@@ -1,6 +1,10 @@
 # Work plans
 
-There is no active plan right now. When the owner adds one, it goes in this folder.
+Active plan:
+
+| Plan | Contents |
+|---|---|
+| [v0.6: dashboard improvements](v0.6/README.md) | Expand/collapse all, full-log export, export formats, batch actions, search |
 
 Finished plans, kept for reference:
 
