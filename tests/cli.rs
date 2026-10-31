@@ -651,6 +651,12 @@ fn dashboard_requires_token_and_local_host() {
         page.contains("id=\"scope\""),
         "output scope menu is on the page"
     );
+    assert!(
+        page.contains("id=\"format\"")
+            && page.contains("value=\"markdown\"")
+            && page.contains("value=\"json\""),
+        "export format menu is on the page"
+    );
 
     assert_eq!(http("POST", "/api/jobs/last/resume", &host, &token).0, 409);
     let (code, body) = http("POST", "/api/jobs/last/rerun", &host, &token);

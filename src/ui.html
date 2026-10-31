@@ -130,6 +130,11 @@
       <option value="all">Full log</option>
       <option value="5000">Last 5000 lines</option>
     </select>
+    <select id="format" aria-label="Format of Copy and Download">
+      <option value="text">Text</option>
+      <option value="markdown">Markdown</option>
+      <option value="json">JSON</option>
+    </select>
     <button id="copy" title="Copy the details and output of the selected jobs, like Ctrl+C">Copy selected</button>
     <button id="download" title="Merge the selected jobs into one text file and download it">Download selected</button>
   </div>
@@ -157,6 +162,10 @@ $("all").checked = showAll;
 try { $("scope").value = localStorage.getItem("ptrack.scope") || "all"; } catch (e) {}
 $("scope").addEventListener("change", (e) => {
   try { localStorage.setItem("ptrack.scope", e.target.value); } catch (err) {}
+});
+try { $("format").value = localStorage.getItem("ptrack.format") || "text"; } catch (e) {}
+$("format").addEventListener("change", (e) => {
+  try { localStorage.setItem("ptrack.format", e.target.value); } catch (err) {}
 });
 // Project and tag filters, remembered per browser like "Show older jobs".
 // A link to one job (`ptrack ui --job ID`) ignores them, so that job is shown.
@@ -346,33 +355,101 @@ $("pick-all").addEventListener("change", (e) => {
   updateBar();
 });
 
-// One text for the selected jobs: a short header per job, then its output
-// (the whole log, or the last 5000 lines; the server sends at most the last 32 MB).
-async function selectedText() {
+// Copy / Download: fetch the output of every selected job, then wrap it in the
+// chosen format. Fetching and formatting are separate so each format is written
+// once, against the same data. The whole log, or the last 5000 lines; the server
+// sends at most the last 32 MB of a log.
+async function collectSelected() {
   const picked = shown.filter((j) => selected.has(j.id));
   const lines = $("scope").value === "5000" ? "5000" : "all";
-  const parts = await Promise.all(picked.map(async (j) => {
-    let text = "(log unavailable)";
-    let note = null;
+  return Promise.all(picked.map(async (job) => {
+    const item = { job, output: null, truncated: false };
     try {
-      const r = await api("/api/jobs/" + j.id + "/log?lines=" + lines);
+      const r = await api("/api/jobs/" + job.id + "/log?lines=" + lines);
       if (r.ok) {
-        text = (await r.text()) || "(no output)";
-        if (r.headers.get("X-Ptrack-Truncated") === "1") note = "(log truncated: only the last 32 MB are included)";
+        item.output = await r.text();
+        item.truncated = r.headers.get("X-Ptrack-Truncated") === "1";
       }
     } catch (e) {}
-    return [
-      "=== job " + j.id + ": " + title(j) + " ===",
-      "state: " + j.state + (j.exit_code != null ? " (exit " + j.exit_code + ")" : "") + " · took " + dur(j.duration_ms),
-      "folder: " + j.cwd,
-      "started: " + new Date(j.started_ms).toISOString(),
-      "log: " + j.log_path,
-      ...(note ? [note] : []),
-      "",
-      text,
-    ].join("\n");
+    return item;
   }));
-  return parts.join("\n\n") + "\n";
+}
+
+const TRUNCATED_NOTE = "log truncated: only the last 32 MB are included";
+
+function stateLine(j) {
+  return j.state + (j.exit_code != null ? " (exit " + j.exit_code + ")" : "") + " · took " + dur(j.duration_ms);
+}
+
+function asText(items) {
+  return items.map(({ job: j, output, truncated }) => [
+    "=== job " + j.id + ": " + title(j) + " ===",
+    "state: " + stateLine(j),
+    "folder: " + j.cwd,
+    "started: " + new Date(j.started_ms).toISOString(),
+    "log: " + j.log_path,
+    ...(truncated ? ["(" + TRUNCATED_NOTE + ")"] : []),
+    "",
+    output === null ? "(log unavailable)" : output || "(no output)",
+  ].join("\n")).join("\n\n") + "\n";
+}
+
+// A code fence one backtick longer than any run in the text, so a log that
+// contains ``` cannot end the block early.
+function fenceFor(text) {
+  const longest = Math.max(0, ...(text.match(/`+/g) || []).map((r) => r.length));
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+function inlineCode(text) {
+  const fence = "`".repeat(Math.max(0, ...(text.match(/`+/g) || []).map((r) => r.length)) + 1);
+  return fence + " " + text + " " + fence;
+}
+
+function asMarkdown(items, now) {
+  const blocks = items.map(({ job: j, output, truncated }) => {
+    const body = output === null ? "(log unavailable)" : (output || "(no output)").replace(/\n$/, "");
+    const fence = fenceFor(body);
+    const labels = [j.project ? "Project: " + j.project : null, j.tag ? "Tag: " + j.tag : null].filter(Boolean);
+    return [
+      "## " + j.id + " · " + title(j).replace(/\s+/g, " "),
+      "",
+      "- State: " + stateLine(j),
+      ...(labels.length ? ["- " + labels.join(" · ")] : []),
+      "- Folder: " + inlineCode(j.cwd),
+      "- Started: " + new Date(j.started_ms).toISOString(),
+      "- Log: " + inlineCode(j.log_path),
+      ...(truncated ? ["", "_" + TRUNCATED_NOTE[0].toUpperCase() + TRUNCATED_NOTE.slice(1) + "._"] : []),
+      "",
+      fence,
+      body,
+      fence,
+    ].join("\n");
+  });
+  const head = "# ptrack export\n\nExported " + now.toISOString() + " · " + items.length + " job" + (items.length === 1 ? "" : "s");
+  return [head, ...blocks].join("\n\n") + "\n";
+}
+
+function asJson(items, now) {
+  return JSON.stringify({
+    exported_at: now.toISOString(),
+    jobs: items.map(({ job: j, output, truncated }) => ({
+      id: j.id, title: title(j), command: j.command, state: j.state, exit_code: j.exit_code ?? null,
+      duration_ms: j.duration_ms, project: j.project ?? null, tag: j.tag ?? null, agent: j.agent ?? null,
+      cwd: j.cwd, started: new Date(j.started_ms).toISOString(), log_path: j.log_path,
+      log_truncated: truncated, output,
+    })),
+  }, null, 2) + "\n";
+}
+
+const FORMATS = {
+  text: { label: "Text", mime: "text/plain", ext: "txt", make: asText },
+  markdown: { label: "Markdown", mime: "text/markdown", ext: "md", make: asMarkdown },
+  json: { label: "JSON", mime: "application/json", ext: "json", make: asJson },
+};
+
+function currentFormat() {
+  return FORMATS[$("format").value] || FORMATS.text;
 }
 
 async function copyText(textPromise) {
@@ -401,9 +478,10 @@ async function copyText(textPromise) {
 
 $("copy").addEventListener("click", async () => {
   const count = shown.filter((j) => selected.has(j.id)).length;
+  const format = currentFormat();
   try {
-    await copyText(selectedText());
-    toast("Copied " + count + " job" + (count === 1 ? "" : "s") + " to the clipboard.");
+    await copyText(collectSelected().then((items) => format.make(items, new Date())));
+    toast("Copied " + count + " job" + (count === 1 ? "" : "s") + " (" + format.label + ") to the clipboard.");
   } catch (e) {
     toast("Could not copy: " + e.message);
   }
@@ -411,16 +489,19 @@ $("copy").addEventListener("click", async () => {
 
 $("download").addEventListener("click", async () => {
   const count = shown.filter((j) => selected.has(j.id)).length;
-  const text = await selectedText();
+  const format = currentFormat();
+  const now = new Date();
+  const text = format.make(await collectSelected(), now);
+  const stamp = now.toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
   const link = el("a", {
-    href: URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" })),
-    download: "ptrack-jobs-" + new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-") + ".txt",
+    href: URL.createObjectURL(new Blob([text], { type: format.mime + ";charset=utf-8" })),
+    download: "ptrack-jobs-" + stamp + "." + format.ext,
   });
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(link.href), 10000);
-  toast("Downloaded " + count + " job" + (count === 1 ? "" : "s") + ".");
+  toast("Downloaded " + count + " job" + (count === 1 ? "" : "s") + " (" + format.label + ").");
 });
 
 let inFlight = false;

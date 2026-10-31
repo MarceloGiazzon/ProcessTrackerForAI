@@ -171,8 +171,15 @@ You can open the output of several jobs at the same time. **Expand all** opens e
 and output of the ticked jobs on your clipboard (as if you had pressed Ctrl+C), and **Download
 selected** merges them into one `.txt` file. The menu next to them chooses how much of each log to
 take: the **full log** (the default; for logs over 32 MB only the last 32 MB, and the file says so)
-or the **last 5000 lines**. Each job starts with a short header (id, command, state,
-folder, start time, log path), followed by its output.
+or the **last 5000 lines**. A second menu chooses the format:
+
+| Format | File | Good for |
+|---|---|---|
+| Text (default) | `.txt` | Reading, or pasting into a chat |
+| Markdown | `.md` | An issue or pull request: one heading per job, the output in a code block |
+| JSON | `.json` | Scripts, or handing the results to an AI agent: one object per job with its details and output |
+
+Each job comes with its id, title, state, folder, start time and log path, followed by its output.
 
 ## Notifications when a job ends
 
