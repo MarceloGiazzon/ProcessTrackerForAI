@@ -1268,7 +1268,8 @@ fn heartbeat_setting_is_saved_and_validated() {
 fn cpu_time_of_the_whole_tree_is_recorded() {
     let h = Home::new("cpu");
     // About two seconds of busy work. On Unix it is spread over many
-    // short-lived `date` processes, which must still count.
+    // short-lived `date` processes, which must still count. The job may end
+    // right after the first 2-second sample; its CPU must count all the same.
     #[cfg(windows)]
     let busy = "powershell -NoProfile -Command \"$end=(Get-Date).AddSeconds(2); while((Get-Date) -lt $end){}\"";
     #[cfg(unix)]

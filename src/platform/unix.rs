@@ -153,15 +153,34 @@ pub fn stop_sharing_std_handles() {}
 #[derive(Default)]
 pub struct CpuMeter {
     tree: crate::cpu::TreeCpu,
+    best: u64,
 }
 
 impl CpuMeter {
     /// Total CPU time of the tree so far, in ms. Never goes down. `None` if
     /// this system cannot tell.
     pub fn sample(&mut self, tree: &Tree) -> Option<u64> {
-        let procs = group_processes(tree.pgid)?;
-        Some(self.tree.update(procs))
+        let live = group_processes(tree.pgid).map(|procs| self.tree.update(procs));
+        // Once the command has exited and been reaped, the system has the
+        // exact total of everything it ran (the supervisor has no other
+        // children). Before that this is 0. Without it, a job that ends
+        // between two samples would show almost no CPU.
+        let reaped = reaped_children_cpu_ms();
+        self.best = self.best.max(live.unwrap_or(0)).max(reaped.unwrap_or(0));
+        (live.is_some() || reaped.is_some()).then_some(self.best)
     }
+}
+
+/// CPU time of this process's children that have exited and been waited
+/// for, including their own reaped children, in ms.
+fn reaped_children_cpu_ms() -> Option<u64> {
+    // SAFETY: getrusage fills the struct it is given.
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage) } != 0 {
+        return None;
+    }
+    let ms = |t: libc::timeval| t.tv_sec.max(0) as u64 * 1000 + t.tv_usec.max(0) as u64 / 1000;
+    Some(ms(usage.ru_utime) + ms(usage.ru_stime))
 }
 
 #[cfg(target_os = "linux")]
