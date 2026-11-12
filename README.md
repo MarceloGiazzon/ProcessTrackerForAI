@@ -104,14 +104,31 @@ output somewhere else (`cmd > build.log`). ptrack adds a few lines of its own, a
 # pid: 30444
 # started: 2026-11-12T16:08:47Z
 ...whatever the command prints...
+# [ptrack] 00:01:30 running, no output for 30s, tree cpu=41s
+# [ptrack] 00:02:00 running, no output for 1m00s, tree cpu=1m12s
+...
 # ended: 2026-11-12T16:12:51Z  exit=0  duration=04:04  output=none  state=passed
 ```
 
 - `# shell: yes` appears only for `-s` jobs.
+- **Heartbeat lines** (`# [ptrack] <elapsed> ...`) appear only while the command prints nothing: after
+  30 seconds of silence, then every 30 seconds until it prints again. *tree cpu* is the CPU time
+  used so far by the command and everything it started, so a silent but busy job can be told
+  apart from one that is just waiting. Change the interval with `ptrack config heartbeat-seconds N`
+  (0 turns these lines off) or the `PTRACK_HEARTBEAT_SECONDS` environment variable, which wins.
 - `output=` counts the lines the command printed, or says `none`.
 - ptrack's own lines never become the job's *last line*. A job that printed nothing shows
   `(no output)` there.
 - `ptrack wait` and `ptrack run -q` show only the command's own lines after a failure.
+
+The command itself gets three environment variables, so a wrapper script can tell that it runs
+under ptrack and skip what ptrack already does (its own heartbeat lines, for example):
+
+| Variable | Value |
+|---|---|
+| `PTRACK_JOB_ID` | The job's id, e.g. `k3f9a2` |
+| `PTRACK_LOG` | Full path of the job's log file |
+| `PTRACK_HEARTBEAT_SECONDS` | Seconds of silence before ptrack writes a heartbeat line (0 = never) |
 
 ## Projects and tags
 
@@ -337,6 +354,7 @@ agent (Aider, for example), use `--agent` / `--session`, or set the `PTRACK_AGEN
 | `ptrack hook uninstall [--project]` | Removes the hook. |
 | `ptrack notify [on\|off\|min-seconds N\|test]` | Desktop notification when a job ends. |
 | `ptrack notify webhook URL\|off`, `ptrack notify webhook-format json\|text` | Also POST each finished job to a web address. |
+| `ptrack config [heartbeat-seconds N]` | Shows or changes settings: how often heartbeat lines go into the log of a silent job (default 30 s, 0 = off). |
 | `ptrack instructions` | Prints the text that tells an AI agent to use ptrack, for its instructions file. |
 
 Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),
@@ -390,6 +408,10 @@ no longer exists, the job is shown as **lost**.
   from its Job Object. Normal dev tools don't do this.
 - **Background helpers are left alone after a normal exit.** For example, a Gradle daemon started by
   a build keeps running, just as it would without ptrack. `stop` does kill them.
+- **Tree CPU only sees the tree.** Work done by a process outside the job, such as a Gradle daemon
+  that an earlier build started, does not count. On Linux and macOS, a process that leaves the
+  process group, or that exits and is reaped by a process outside it, loses at most its last
+  2 seconds of CPU time.
 - **No input.** Jobs get no keyboard input, so commands that ask questions get an end-of-input
   instead of waiting forever.
 - **Secrets:** command lines and output are stored as-is. Don't pass secrets as command arguments.

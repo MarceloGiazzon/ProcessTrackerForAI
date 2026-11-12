@@ -6,6 +6,7 @@
 //! - `interrupt` / `kill` / `release`: used by the owning supervisor.
 //! - `kill_external` / `suspend_external` / `resume_external`: used by other
 //!   `ptrack` commands, which only know the job id and pid.
+//! - `CpuMeter`: total CPU time of the tree, for the supervisor.
 //! - `pid_alive`, `install_interrupt_handler`, `spawn_detached`, `resolve_program`,
 //!   `stop_sharing_std_handles`.
 

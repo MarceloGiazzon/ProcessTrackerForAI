@@ -10,10 +10,11 @@ use std::sync::atomic::Ordering;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::config;
 use crate::job::{self, HEARTBEAT_MS, Job, State};
 use crate::output::{self, NO_OUTPUT, Output};
 use crate::platform::{self, INTERRUPTS};
-use crate::util::{clean_line, fmt_duration, now_ms};
+use crate::util::{clean_line, fmt_cpu, fmt_duration, now_ms};
 
 /// Default time a job gets to exit on its own after a stop request.
 pub const DEFAULT_GRACE_MS: u64 = 5_000;
@@ -227,6 +228,12 @@ fn supervise(opts: RunOpts) -> i32 {
     if let Some(dir) = &opts.cwd {
         cmd.current_dir(dir);
     }
+    // So wrappers know they run under ptrack and need not repeat what it
+    // already writes (heartbeats, header, footer).
+    let heartbeat_s = config::heartbeat_seconds(&config::load());
+    cmd.env("PTRACK_JOB_ID", &id)
+        .env("PTRACK_LOG", &job.log_path)
+        .env("PTRACK_HEARTBEAT_SECONDS", heartbeat_s.to_string());
     // `_lifeline` must stay alive until this function returns: on Unix,
     // dropping it tells the guard process that the supervisor is gone.
     // (Naming it `_` instead would drop it immediately.)
@@ -292,6 +299,9 @@ fn supervise(opts: RunOpts) -> i32 {
     let mut killed = false;
     let mut stop_deadline = 0u64;
     let mut next_heartbeat = now_ms() + HEARTBEAT_MS;
+    let mut cpu = platform::CpuMeter::default();
+    let silence_every_ms = heartbeat_s.saturating_mul(1000);
+    let mut last_note_ms = job.started_ms;
     let status: Option<ExitStatus> = loop {
         match child.try_wait() {
             Ok(Some(s)) => break Some(s),
@@ -326,8 +336,20 @@ fn supervise(opts: RunOpts) -> i32 {
         if now >= next_heartbeat {
             job.heartbeat_ms = now;
             job.last_line = log.last_line();
+            job.last_output_ms = log.last_output_ms();
+            job.cpu_ms = cpu.sample(&tree).or(job.cpu_ms);
             let _ = job.save();
             next_heartbeat = now + HEARTBEAT_MS;
+        }
+        if silence_every_ms > 0 {
+            // Silent for the whole interval: since the last output and since
+            // the last line ptrack wrote about it.
+            let silent_since = log.last_output_ms().unwrap_or(job.started_ms);
+            if now.saturating_sub(silent_since.max(last_note_ms)) >= silence_every_ms {
+                job.cpu_ms = cpu.sample(&tree).or(job.cpu_ms);
+                log.note(&[silence_line(&job, now, silent_since)]);
+                last_note_ms = now;
+            }
         }
         thread::sleep(Duration::from_millis(100));
     };
@@ -338,6 +360,9 @@ fn supervise(opts: RunOpts) -> i32 {
     while readers.iter().flatten().any(|h| !h.is_finished()) && now_ms() < deadline {
         thread::sleep(Duration::from_millis(20));
     }
+    // While the tree still exists: on Windows this is the exact final total.
+    job.cpu_ms = cpu.sample(&tree).or(job.cpu_ms);
+    job.last_output_ms = log.last_output_ms();
 
     if cancelled {
         platform::kill(&tree);
@@ -421,6 +446,25 @@ fn footer(job: &Job, lines: Option<Option<u64>>) -> String {
         job.ended_at.as_deref().unwrap_or("?"),
         output::clock_mm_ss(job.duration_ms()),
         job.state.as_str()
+    )
+}
+
+/// What ptrack writes into the log while the command is silent, e.g.
+/// `# [ptrack] 00:05:30 running, no output for 2m00s, tree cpu=41s`.
+fn silence_line(job: &Job, now: u64, silent_since: u64) -> String {
+    let doing = if job::paused_marker(&job.id).exists() {
+        "paused"
+    } else {
+        "running"
+    };
+    let cpu = job
+        .cpu_ms
+        .map(|ms| format!(", tree cpu={}", fmt_cpu(ms)))
+        .unwrap_or_default();
+    format!(
+        "# [ptrack] {} {doing}, no output for {}{cpu}",
+        output::clock_hh_mm_ss(now.saturating_sub(job.started_ms)),
+        fmt_duration(now.saturating_sub(silent_since)),
     )
 }
 

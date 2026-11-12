@@ -1,5 +1,5 @@
-//! User settings, kept in `<home>/config.json`. Only `ptrack notify ...`
-//! writes this file. A missing file means "all defaults".
+//! User settings, kept in `<home>/config.json`. Only `ptrack notify ...` and
+//! `ptrack config ...` write this file. A missing file means "all defaults".
 
 use std::fs;
 use std::io;
@@ -13,6 +13,72 @@ use crate::job;
 #[serde(default)]
 pub struct Config {
     pub notify: NotifyConfig,
+    pub activity: ActivityConfig,
+}
+
+/// How ptrack reports on jobs that print nothing for a while.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
+pub struct ActivityConfig {
+    /// After this many seconds without output, the supervisor writes a
+    /// `# [ptrack] ...` line into the log, and again every so many seconds
+    /// while the silence lasts. 0 turns these lines off.
+    pub heartbeat_seconds: u64,
+}
+
+impl Default for ActivityConfig {
+    fn default() -> Self {
+        ActivityConfig {
+            heartbeat_seconds: 30,
+        }
+    }
+}
+
+/// Seconds between heartbeat lines: `PTRACK_HEARTBEAT_SECONDS` if set to a
+/// number, else the setting.
+pub fn heartbeat_seconds(cfg: &Config) -> u64 {
+    std::env::var("PTRACK_HEARTBEAT_SECONDS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(cfg.activity.heartbeat_seconds)
+}
+
+const USAGE: &str = "usage: ptrack config [heartbeat-seconds N]";
+
+/// `ptrack config`: shows the activity settings, or changes one.
+pub fn command(args: &[String]) -> Result<i32, String> {
+    let mut cfg = load_checked()?;
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    let number = |name: &str, n: &str| -> Result<u64, String> {
+        n.parse()
+            .map_err(|_| format!("{name} needs a whole number of seconds, got '{n}'"))
+    };
+    match words.as_slice() {
+        [] => {
+            show(&cfg);
+            return Ok(0);
+        }
+        ["heartbeat-seconds", n] => {
+            cfg.activity.heartbeat_seconds = number("heartbeat-seconds", n)?
+        }
+        _ => return Err(USAGE.into()),
+    }
+    save(&cfg).map_err(|e| format!("cannot save settings: {e}"))?;
+    show(&cfg);
+    Ok(0)
+}
+
+fn show(cfg: &Config) {
+    let a = &cfg.activity;
+    let heartbeat = match a.heartbeat_seconds {
+        0 => "off".to_string(),
+        n => format!("every {n}s while a job prints nothing"),
+    };
+    println!("heartbeat-seconds: {} ({heartbeat})", a.heartbeat_seconds);
+    if let Ok(v) = std::env::var("PTRACK_HEARTBEAT_SECONDS") {
+        println!("  PTRACK_HEARTBEAT_SECONDS={v} is set and wins over this setting");
+    }
+    println!("settings file: {}", path().display());
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

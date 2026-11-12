@@ -50,6 +50,16 @@ pub fn fmt_duration(ms: u64) -> String {
     }
 }
 
+/// CPU time: tenths of a second while small (`0.3s`, `4.1s`), else like
+/// `fmt_duration` (`41s`, `3m04s`).
+pub fn fmt_cpu(ms: u64) -> String {
+    if ms < 10_000 {
+        format!("{}.{}s", ms / 1000, (ms % 1000) / 100)
+    } else {
+        fmt_duration(ms)
+    }
+}
+
 /// A short random job id such as `k3f9a2`. Collisions are checked by the caller.
 pub fn new_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -249,6 +259,9 @@ mod tests {
         assert_eq!(fmt_duration(184_000), "3m04s");
         assert_eq!(fmt_duration(7_500_000), "2h05m");
         assert_eq!(fmt_duration(273_600_000), "3d04h");
+        assert_eq!(fmt_cpu(340), "0.3s");
+        assert_eq!(fmt_cpu(9_999), "9.9s");
+        assert_eq!(fmt_cpu(41_000), "41s");
     }
 
     #[test]

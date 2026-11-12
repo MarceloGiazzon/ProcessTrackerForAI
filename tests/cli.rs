@@ -28,6 +28,15 @@ impl Home {
             .expect("ptrack runs")
     }
 
+    fn ptrack_env(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ptrack"));
+        cmd.args(args).env("PTRACK_HOME", &self.0);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.output().expect("ptrack runs")
+    }
+
     fn json(&self, args: &[&str]) -> serde_json::Value {
         let out = self.ptrack(args);
         serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
@@ -1158,4 +1167,116 @@ fn background_helpers_survive_a_normal_exit_on_unix() {
         alive,
         "a normal exit must not kill helpers the command left running"
     );
+}
+
+/// Runs a shell script as a quiet foreground job with extra environment
+/// variables; returns the job's JSON and its log.
+fn run_job(h: &Home, script: &str, env: &[(&str, &str)]) -> (serde_json::Value, String) {
+    let out = h.ptrack_env(&["run", "-q", "-s", "--", script], env);
+    assert!(out.status.success(), "{out:?}");
+    let job = h.json(&["status", "last", "--json"]);
+    let log = log_of(h, job["id"].as_str().unwrap());
+    (job, log)
+}
+
+fn heartbeat_lines(log: &str) -> Vec<&str> {
+    log.lines()
+        .filter(|l| l.starts_with("# [ptrack] "))
+        .collect()
+}
+
+#[cfg(windows)]
+const SILENT_3S: &str = "ping -n 4 127.0.0.1 > nul";
+#[cfg(unix)]
+const SILENT_3S: &str = "sleep 3";
+#[cfg(windows)]
+const CHATTY_5S: &str = "for /l %i in (1,1,6) do @(echo tick %i& ping -n 2 127.0.0.1 > nul)";
+#[cfg(unix)]
+const CHATTY_5S: &str = "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick $i; sleep 0.5; done";
+
+#[test]
+fn a_silent_job_gets_heartbeat_lines_in_its_log() {
+    let h = Home::new("heartbeat");
+    let (_, log) = run_job(&h, SILENT_3S, &[("PTRACK_HEARTBEAT_SECONDS", "1")]);
+    let beats = heartbeat_lines(&log);
+    assert!(beats.len() >= 2, "{log}");
+    assert!(
+        beats[0].starts_with("# [ptrack] 00:00:01 running, no output for 1s"),
+        "{log}"
+    );
+    assert!(beats.iter().all(|l| l.contains(", tree cpu=")), "{log}");
+    // The footer still closes the log, and heartbeats are not output.
+    assert!(
+        log.trim_end().ends_with("output=none  state=passed"),
+        "{log}"
+    );
+
+    // A command that keeps printing gets none.
+    let (job, log) = run_job(&h, CHATTY_5S, &[("PTRACK_HEARTBEAT_SECONDS", "2")]);
+    assert!(heartbeat_lines(&log).is_empty(), "{log}");
+    assert!(
+        job["last_line"].as_str().unwrap().starts_with("tick "),
+        "{job}"
+    );
+
+    // 0 turns them off.
+    let (_, log) = run_job(&h, SILENT_3S, &[("PTRACK_HEARTBEAT_SECONDS", "0")]);
+    assert!(heartbeat_lines(&log).is_empty(), "{log}");
+}
+
+#[test]
+fn the_command_learns_its_job_id_log_and_heartbeat() {
+    let h = Home::new("jobenv");
+    let script = if cfg!(windows) { "set PTRACK" } else { "env" };
+    let (job, log) = run_job(&h, script, &[("PTRACK_HEARTBEAT_SECONDS", "7")]);
+    let id = job["id"].as_str().unwrap();
+    assert!(log.contains(&format!("PTRACK_JOB_ID={id}")), "{log}");
+    let log_path = job["log_path"].as_str().unwrap();
+    assert!(log.contains(&format!("PTRACK_LOG={log_path}")), "{log}");
+    assert!(log.contains("PTRACK_HEARTBEAT_SECONDS=7"), "{log}");
+}
+
+#[test]
+fn heartbeat_setting_is_saved_and_validated() {
+    let h = Home::new("config");
+    let shown = h.ptrack_env(&["config"], &[]);
+    assert!(
+        String::from_utf8_lossy(&shown.stdout).contains("heartbeat-seconds: 30"),
+        "{shown:?}"
+    );
+    assert!(
+        h.ptrack(&["config", "heartbeat-seconds", "5"])
+            .status
+            .success()
+    );
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(h.0.join("config.json")).unwrap()).unwrap();
+    assert_eq!(saved["activity"]["heartbeat_seconds"], 5);
+    assert_eq!(
+        h.ptrack(&["config", "heartbeat-seconds", "soon"])
+            .status
+            .code(),
+        Some(2)
+    );
+    assert_eq!(h.ptrack(&["config", "sideways"]).status.code(), Some(2));
+    // Older settings files without this section still load.
+    std::fs::write(h.0.join("config.json"), r#"{"notify":{"desktop":true}}"#).unwrap();
+    let shown = h.ptrack(&["config"]);
+    assert!(String::from_utf8_lossy(&shown.stdout).contains("heartbeat-seconds: 30"));
+}
+
+#[test]
+fn cpu_time_of_the_whole_tree_is_recorded() {
+    let h = Home::new("cpu");
+    // About two seconds of busy work. On Unix it is spread over many
+    // short-lived `date` processes, which must still count.
+    #[cfg(windows)]
+    let busy = "powershell -NoProfile -Command \"$end=(Get-Date).AddSeconds(2); while((Get-Date) -lt $end){}\"";
+    #[cfg(unix)]
+    let busy = "end=$(($(date +%s)+3)); while [ $(date +%s) -lt $end ]; do :; done";
+    let (job, _) = run_job(&h, busy, &[]);
+    let cpu = job["cpu_ms"].as_u64().unwrap_or(0);
+    assert!(cpu >= 300, "cpu_ms = {cpu}: {job}");
+    let status = String::from_utf8_lossy(&h.ptrack(&["status"]).stdout).to_string();
+    assert!(status.contains("(whole process tree)"), "{status}");
 }

@@ -2,6 +2,7 @@
 
 mod commands;
 mod config;
+mod cpu;
 #[cfg(unix)]
 mod guard;
 mod hook;
@@ -43,6 +44,9 @@ USAGE
   ptrack hook uninstall [--project]             remove that hook again
   ptrack notify [on|off|min-seconds N|test]     desktop notification when a job ends
                                                 (off by default; only jobs >= 30 s)
+  ptrack config [heartbeat-seconds N]           show or change settings: while a job prints nothing,
+                                                add a '# [ptrack]' line to its log every N s
+                                                (default 30; 0 = off; or PTRACK_HEARTBEAT_SECONDS)
   ptrack instructions                           print the text that tells an AI agent to use ptrack
                                                 (append it to AGENTS.md, CLAUDE.md, GEMINI.md, ...)
   ptrack notify webhook URL|off                 also POST each finished job to URL
@@ -63,6 +67,7 @@ ID can be a unique prefix of a job id, or 'last'.
 Every log starts with '# ptrack' lines (command, folder, pid) and ends with a '# ended:' line
 (exit code, duration, how many lines the command printed). A job that printed nothing shows
 '(no output)' as its last line.
+The command gets PTRACK_JOB_ID, PTRACK_LOG and PTRACK_HEARTBEAT_SECONDS in its environment.
 Data folder: set PTRACK_HOME to override the default per-user location.
 ";
 
@@ -241,6 +246,7 @@ fn dispatch(mut args: VecDeque<String>) -> Result<i32, String> {
             Ok(mcp::serve(allow_control))
         }
         "notify" => notify::command(&args.into_iter().collect::<Vec<_>>()),
+        "config" => config::command(&args.into_iter().collect::<Vec<_>>()),
         // Internal, started by the supervisor on Unix: see guard.rs.
         #[cfg(unix)]
         "__guard" => {

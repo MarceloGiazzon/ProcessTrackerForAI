@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+    CloseHandle, FILETIME, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
 };
 use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE,
@@ -19,14 +19,15 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicProcessIdList,
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectBasicAccountingInformation, JobObjectBasicProcessIdList,
     JobObjectExtendedLimitInformation, OpenJobObjectW, QueryInformationJobObject,
     SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
     CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-    GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SUSPEND_RESUME, ResumeThread, THREAD_SUSPEND_RESUME,
+    GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SUSPEND_RESUME, ResumeThread, THREAD_SUSPEND_RESUME,
 };
 use windows_sys::core::BOOL;
 
@@ -312,6 +313,66 @@ fn for_each_job_process(id: &str, pid: u32, f: impl Fn(HANDLE) -> i32) -> io::Re
         return Err(io::Error::other("no process of this job could be opened"));
     }
     Ok(())
+}
+
+/// Measures the CPU time of the job's whole tree. The Job Object keeps the
+/// total itself, including processes that have already exited.
+#[derive(Default)]
+pub struct CpuMeter {
+    best: u64,
+}
+
+impl CpuMeter {
+    /// Total CPU time of the tree so far, in ms. Never goes down. `None` if
+    /// it cannot be read.
+    pub fn sample(&mut self, tree: &Tree) -> Option<u64> {
+        let now = match tree.job {
+            Some(job) => job_cpu_ms(job),
+            None => process_cpu_ms(tree.pid),
+        }?;
+        self.best = self.best.max(now);
+        Some(self.best)
+    }
+}
+
+/// 100-nanosecond units to milliseconds.
+fn hundred_ns_to_ms(t: u64) -> u64 {
+    t / 10_000
+}
+
+fn job_cpu_ms(job: HANDLE) -> Option<u64> {
+    // SAFETY: the buffer is the struct the API expects; its size is passed in.
+    let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe {
+        QueryInformationJobObject(
+            job,
+            JobObjectBasicAccountingInformation,
+            &mut info as *mut _ as *mut _,
+            std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    let total = info.TotalUserTime.max(0) as u64 + info.TotalKernelTime.max(0) as u64;
+    (ok != 0).then(|| hundred_ns_to_ms(total))
+}
+
+/// Without a Job Object only the main process can be measured.
+fn process_cpu_ms(pid: u32) -> Option<u64> {
+    let mut result = None;
+    with_process(pid, PROCESS_QUERY_LIMITED_INFORMATION, |h| {
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: valid handle and out pointers.
+        if unsafe { GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user) } != 0 {
+            let ticks =
+                |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+            result = Some(hundred_ns_to_ms(ticks(kernel) + ticks(user)));
+        }
+    });
+    result
 }
 
 pub fn pid_alive(pid: u32) -> bool {

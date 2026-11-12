@@ -90,6 +90,11 @@ impl Output {
         self.lock().last_line.clone()
     }
 
+    /// When the child last printed anything; `None` if it never did.
+    pub fn last_output_ms(&self) -> Option<u64> {
+        self.lock().last_output_ms
+    }
+
     /// Lines the child printed, counting an unfinished last line; `None` if
     /// it printed nothing at all.
     pub fn line_count(&self) -> Option<u64> {
@@ -156,6 +161,12 @@ pub fn describe_lines(count: Option<u64>) -> String {
 pub fn clock_mm_ss(ms: u64) -> String {
     let s = ms / 1000;
     format!("{:02}:{:02}", s / 60, s % 60)
+}
+
+/// Elapsed time as a clock: `00:05:30`.
+pub fn clock_hh_mm_ss(ms: u64) -> String {
+    let s = ms / 1000;
+    format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
 }
 
 #[cfg(test)]
@@ -225,5 +236,6 @@ two
         assert_eq!(describe_lines(Some(7)), "7 lines");
         assert_eq!(clock_mm_ss(65_000), "01:05");
         assert_eq!(clock_mm_ss(3_725_000), "62:05");
+        assert_eq!(clock_hh_mm_ss(330_000), "00:05:30");
     }
 }

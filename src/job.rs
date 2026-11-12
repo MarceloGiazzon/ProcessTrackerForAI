@@ -88,6 +88,13 @@ pub struct Job {
     pub log_path: String,
     pub last_line: Option<String>,
     pub error: Option<String>,
+    /// When the command last printed anything (epoch ms); none yet if absent.
+    #[serde(default)]
+    pub last_output_ms: Option<u64>,
+    /// CPU time used so far by the job's whole process tree, in ms. Absent
+    /// when the system could not tell, and in job files from before v0.7.
+    #[serde(default)]
+    pub cpu_ms: Option<u64>,
 }
 
 pub fn home() -> PathBuf {
@@ -211,6 +218,8 @@ impl Job {
             pid: None,
             last_line: None,
             error: None,
+            last_output_ms: None,
+            cpu_ms: None,
         }
     }
 

@@ -10,7 +10,7 @@ use std::time::Duration;
 use crate::job::{self, Job, State};
 use crate::platform;
 use crate::supervise::{self, RunOpts, summary};
-use crate::util::{fmt_duration, last_lines, now_ms, truncate};
+use crate::util::{fmt_cpu, fmt_duration, last_lines, now_ms, truncate};
 
 type CmdResult = Result<i32, String>;
 
@@ -213,6 +213,9 @@ pub fn status(id: Option<&str>, json: bool) -> CmdResult {
         row("ended", e);
     }
     row("duration", &fmt_duration(j.duration_ms()));
+    if let Some(ms) = j.cpu_ms {
+        row("cpu", &format!("{} (whole process tree)", fmt_cpu(ms)));
+    }
     if let Some(c) = j.exit_code {
         row("exit", &c.to_string());
     }
