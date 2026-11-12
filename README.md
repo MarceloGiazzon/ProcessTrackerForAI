@@ -397,7 +397,10 @@ supervisor. Other commands only read it, or leave small request files next to it
 `<id>.paused`). So there is no database and no locking.
 
 If a job file says "running" but its heartbeat is older than 10 seconds and its supervisor process
-no longer exists, the job is shown as **lost**.
+no longer exists, the job is shown as **lost**. The first ptrack command that notices also writes
+`"state": "lost"` into the job file (with `ended_at` set to the last heartbeat), so tools that read
+job files directly stop showing it as running. This is the only time anything but the supervisor
+writes a job file.
 
 ### Process control per system
 

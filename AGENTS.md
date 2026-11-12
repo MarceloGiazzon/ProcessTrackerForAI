@@ -36,6 +36,10 @@ Key idea: **one JSON file per job** (`<home>/jobs/<id>.json`) plus one log file
 1. **Single writer.** Only the job's own supervisor (in `supervise.rs`) writes `jobs/<id>.json`.
    Other commands only read it. To ask the supervisor for something, they write a small marker
    file (`<id>.stop`, `<id>.paused`).
+   *One exception, approved by the owner on 2026-11-12:* when a reader finds a job `lost` (its
+   supervisor is gone), `record_if_lost` in `job.rs` writes `"state": "lost"`, after reading the
+   file again to make sure the supervisor did not write in between. Add no other exceptions
+   without asking.
 2. **No new dependencies.** The only crates allowed are `serde`, `serde_json`, `libc` (Unix) and
    `windows-sys` (Windows; you may enable more of its features). Use the standard library for
    everything else. If you think you need a crate, stop and ask.

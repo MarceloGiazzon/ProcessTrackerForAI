@@ -3,6 +3,10 @@
 //! Rule that keeps this lock-free: a job file has exactly one writer, the
 //! supervisor that owns the job. Other commands only read it, and talk to the
 //! supervisor through small marker files (`<id>.stop`, `<id>.paused`).
+//!
+//! One exception (see `record_if_lost`): once a job is `lost`, its supervisor
+//! is gone, so a reader records that in the file for tools that read job
+//! files directly.
 
 use std::fs;
 use std::io;
@@ -411,8 +415,38 @@ pub fn list_all() -> Vec<Job> {
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .filter_map(|p| read_job(&p).ok())
         .collect();
+    jobs.iter_mut().for_each(record_if_lost);
     jobs.sort_by_key(|j| std::cmp::Reverse(j.started_ms));
     jobs
+}
+
+/// A job file that still says "running" for a job that is `lost` misleads
+/// every tool that reads job files directly (an editor's status line, for
+/// example). So the first reader to notice writes `"state": "lost"`.
+///
+/// This is the one exception to "only the supervisor writes the job file"
+/// (approved by the owner). It is safe because a lost job's supervisor has
+/// exited, or sent no heartbeat for over an hour. The file is read again
+/// right before writing and left alone if the supervisor wrote in between.
+/// If the supervisor is in fact alive (a computer waking from sleep), its
+/// next heartbeat writes its real state back.
+fn record_if_lost(job: &mut Job) {
+    if !job.state.is_active() || job.effective_state() != State::Lost {
+        return;
+    }
+    let Ok(mut fresh) = Job::load(&job.id) else {
+        return;
+    };
+    if !fresh.state.is_active() || fresh.heartbeat_ms != job.heartbeat_ms {
+        return;
+    }
+    fresh.state = State::Lost;
+    // Its last sign of life is the best known end.
+    fresh.ended_ms = Some(fresh.heartbeat_ms);
+    fresh.ended_at = Some(iso_utc(fresh.heartbeat_ms));
+    if fresh.save().is_ok() {
+        *job = fresh;
+    }
 }
 
 /// Finds a job by full id, unique id prefix, or `last` / no id for the newest.

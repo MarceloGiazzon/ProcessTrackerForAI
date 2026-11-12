@@ -1349,3 +1349,37 @@ fn silent_jobs_are_told_apart_as_quiet_or_stalled() {
     // Finished jobs have no activity.
     assert!(h.json(&["status", &busy, "--json"])["activity"].is_null());
 }
+
+#[test]
+fn a_lost_job_is_recorded_as_lost_in_its_file() {
+    let h = Home::new("lost");
+    assert!(
+        h.ptrack(&["run", "-q", "-s", "--", "echo hi"])
+            .status
+            .success()
+    );
+    let id = h.json(&["status", "last", "--json"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Turn it into a job whose supervisor died 20 s ago while it ran.
+    let path = h.0.join("jobs").join(format!("{id}.json"));
+    let mut job: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let beat = job["heartbeat_ms"].as_u64().unwrap() - 20_000;
+    job["state"] = "running".into();
+    job["ended_at"] = serde_json::Value::Null;
+    job["ended_ms"] = serde_json::Value::Null;
+    job["exit_code"] = serde_json::Value::Null;
+    job["heartbeat_ms"] = beat.into();
+    job["supervisor_pid"] = 0.into();
+    std::fs::write(&path, serde_json::to_vec_pretty(&job).unwrap()).unwrap();
+
+    let list = String::from_utf8_lossy(&h.ptrack(&["list"]).stdout).to_string();
+    assert!(list.contains(&format!("{id}  lost")), "{list}");
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["state"], "lost");
+    assert_eq!(saved["ended_ms"], beat);
+    assert!(saved["ended_at"].is_string());
+    assert_eq!(h.state(&id), "lost");
+}
