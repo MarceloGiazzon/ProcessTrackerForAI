@@ -3,17 +3,17 @@
 //! copy of ptrack.
 
 use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::job::{self, HEARTBEAT_MS, Job, State};
+use crate::output::{self, NO_OUTPUT, Output};
 use crate::platform::{self, INTERRUPTS};
-use crate::util::{clean_line, fmt_duration, last_lines, now_ms};
+use crate::util::{clean_line, fmt_duration, now_ms};
 
 /// Default time a job gets to exit on its own after a stop request.
 pub const DEFAULT_GRACE_MS: u64 = 5_000;
@@ -209,12 +209,8 @@ fn supervise(opts: RunOpts) -> i32 {
     let echo = !opts.background && !opts.quiet;
     let speak = !opts.background;
 
-    let log = match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&job.log_path)
-    {
-        Ok(f) => Arc::new(Mutex::new(f)),
+    let log = match Output::open(std::path::Path::new(&job.log_path)) {
+        Ok(out) => Arc::new(out),
         Err(e) => {
             eprintln!("ptrack: cannot open log file {}: {e}", job.log_path);
             return 1;
@@ -247,10 +243,12 @@ fn supervise(opts: RunOpts) -> i32 {
         Ok(c) => c,
         Err(e) => {
             let msg = format!("could not start '{}': {e}", opts.command[0]);
-            let _ = writeln!(log.lock().unwrap(), "[ptrack] {msg}");
+            log.note(&header(&job));
+            log.note(&[format!("# [ptrack] {msg}")]);
             job.error = Some(msg.clone());
             job.last_line = Some(msg.clone());
             job.finish(State::Failed, None);
+            log.note(&[footer(&job, None)]);
             let _ = job.save();
             if speak {
                 eprintln!("[ptrack] job {id}: {msg}");
@@ -258,6 +256,10 @@ fn supervise(opts: RunOpts) -> i32 {
             return 127;
         }
     };
+    // Before attach: on Windows the child is still suspended, and on Unix
+    // nothing reads its output yet, so the header always comes first.
+    job.pid = Some(child.id());
+    log.note(&header(&job));
     let tree = match platform::attach(&child, &id) {
         Ok(t) => t,
         Err(e) => {
@@ -266,7 +268,6 @@ fn supervise(opts: RunOpts) -> i32 {
             return 1;
         }
     };
-    job.pid = Some(child.id());
     if let Err(e) = job.save() {
         eprintln!("ptrack: cannot write job file: {e}");
     }
@@ -276,16 +277,15 @@ fn supervise(opts: RunOpts) -> i32 {
         );
     }
 
-    let last = Arc::new(Mutex::new(None::<String>));
     let readers = [
         child
             .stdout
             .take()
-            .map(|s| pump(s, log.clone(), last.clone(), echo.then_some(Echo::Out))),
+            .map(|s| pump(s, log.clone(), echo.then_some(Echo::Out))),
         child
             .stderr
             .take()
-            .map(|s| pump(s, log.clone(), last.clone(), echo.then_some(Echo::Err))),
+            .map(|s| pump(s, log.clone(), echo.then_some(Echo::Err))),
     ];
 
     let mut cancelled = false;
@@ -325,7 +325,7 @@ fn supervise(opts: RunOpts) -> i32 {
         }
         if now >= next_heartbeat {
             job.heartbeat_ms = now;
-            job.last_line = last.lock().unwrap().clone();
+            job.last_line = log.last_line();
             let _ = job.save();
             next_heartbeat = now + HEARTBEAT_MS;
         }
@@ -353,8 +353,13 @@ fn supervise(opts: RunOpts) -> i32 {
     } else {
         State::Failed
     };
-    job.last_line = last.lock().unwrap().clone();
+    let lines = log.line_count();
+    job.last_line = match lines {
+        None => Some(NO_OUTPUT.to_string()),
+        Some(_) => log.last_line(),
+    };
     job.finish(state, code);
+    log.note(&[footer(&job, Some(lines))]);
     let _ = std::fs::remove_file(job::stop_marker(&id));
     let _ = std::fs::remove_file(job::paused_marker(&id));
     if let Err(e) = job.save() {
@@ -365,7 +370,7 @@ fn supervise(opts: RunOpts) -> i32 {
     if speak {
         eprintln!("{}", summary(&job));
         if opts.quiet && state != State::Passed {
-            if let Ok(lines) = last_lines(std::path::Path::new(&job.log_path), 20) {
+            if let Ok(lines) = output::last_output_lines(std::path::Path::new(&job.log_path), 20) {
                 for l in lines {
                     eprintln!("  {l}");
                 }
@@ -377,6 +382,46 @@ fn supervise(opts: RunOpts) -> i32 {
         (_, Some(c)) if c != 0 => c,
         _ => 1,
     }
+}
+
+/// The lines that open every log, so a log is never empty and shows where a
+/// redirected output went (the command line says `> file`).
+fn header(job: &Job) -> Vec<String> {
+    let mut lines = vec![match &job.label {
+        Some(l) => format!("# ptrack {} {l}", job.id),
+        None => format!("# ptrack {}", job.id),
+    }];
+    if job.shell {
+        lines.extend(output::command_lines(&job.command.join(" ")));
+        lines.push("# shell: yes".into());
+    } else {
+        lines.extend(output::command_lines(&job.command_line()));
+    }
+    lines.push(format!("# cwd: {}", job.cwd));
+    if let Some(pid) = job.pid {
+        lines.push(format!("# pid: {pid}"));
+    }
+    lines.push(format!("# started: {}", job.started_at));
+    lines
+}
+
+/// The line that closes every log, e.g.
+/// `# ended: 2026-11-12T10:00:00Z  exit=0  duration=00:04  output=3 lines  state=passed`.
+/// `lines` is `None` when the command never started.
+fn footer(job: &Job, lines: Option<Option<u64>>) -> String {
+    let exit = job
+        .exit_code
+        .map_or_else(|| "?".to_string(), |c| c.to_string());
+    let output = match lines {
+        Some(count) => output::describe_lines(count),
+        None => "none".into(),
+    };
+    format!(
+        "# ended: {}  exit={exit}  duration={}  output={output}  state={}",
+        job.ended_at.as_deref().unwrap_or("?"),
+        output::clock_mm_ss(job.duration_ms()),
+        job.state.as_str()
+    )
 }
 
 /// One-line result, e.g. `[ptrack] job k3f9a2 failed after 1m02s (exit 1)`.
@@ -421,8 +466,7 @@ enum Echo {
 /// keeps track of the last meaningful line.
 fn pump<R: Read + Send + 'static>(
     mut src: R,
-    log: Arc<Mutex<File>>,
-    last: Arc<Mutex<Option<String>>>,
+    log: Arc<Output>,
     echo: Option<Echo>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
@@ -434,7 +478,6 @@ fn pump<R: Read + Send + 'static>(
                 Ok(n) => n,
             };
             let chunk = &buf[..n];
-            let _ = log.lock().unwrap().write_all(chunk);
             match echo {
                 Some(Echo::Out) => write_ignoring_errors(&mut io::stdout(), chunk),
                 Some(Echo::Err) => write_ignoring_errors(&mut io::stderr(), chunk),
@@ -454,9 +497,7 @@ fn pump<R: Read + Send + 'static>(
             if let Some(text) = clean_line(&pending) {
                 newest = Some(text);
             }
-            if newest.is_some() {
-                *last.lock().unwrap() = newest;
-            }
+            log.child_wrote(chunk, newest);
         }
     })
 }

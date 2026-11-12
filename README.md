@@ -90,6 +90,29 @@ Run commands from inside your project's folder: `npm test` needs the folder with
 `package.json`, and `gradle build` needs Gradle installed. ptrack runs the command exactly as you
 would, so it fails the same way when it would fail without ptrack.
 
+## What a log looks like
+
+Every log tells you what ran and how it ended, even when the command printed nothing or sent its
+output somewhere else (`cmd > build.log`). ptrack adds a few lines of its own, all starting with
+`# `:
+
+```
+# ptrack k3f9a2 full build
+# cmd: gradle build > D:\out\build.log
+# shell: yes
+# cwd: D:\WorkSpace\NPDev
+# pid: 30444
+# started: 2026-11-12T16:08:47Z
+...whatever the command prints...
+# ended: 2026-11-12T16:12:51Z  exit=0  duration=04:04  output=none  state=passed
+```
+
+- `# shell: yes` appears only for `-s` jobs.
+- `output=` counts the lines the command printed, or says `none`.
+- ptrack's own lines never become the job's *last line*. A job that printed nothing shows
+  `(no output)` there.
+- `ptrack wait` and `ptrack run -q` show only the command's own lines after a failure.
+
 ## Projects and tags
 
 Every job belongs to a **project**, shown in the `PROJECT` column. ptrack works it out by itself:

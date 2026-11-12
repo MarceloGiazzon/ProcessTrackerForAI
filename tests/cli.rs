@@ -89,6 +89,63 @@ fn records_pass_and_fail_with_exit_codes() {
     assert_eq!(jobs[1]["last_line"], "hello");
 }
 
+fn log_of(h: &Home, id: &str) -> String {
+    std::fs::read_to_string(h.0.join("logs").join(format!("{id}.log"))).unwrap()
+}
+
+#[test]
+fn every_log_has_a_header_and_a_footer() {
+    let h = Home::new("logframe");
+    // Output sent elsewhere: the log still says what ran and how it ended.
+    let target = h.0.join("elsewhere.txt");
+    std::fs::create_dir_all(&h.0).unwrap();
+    let script = format!("echo hi > \"{}\"", target.display());
+    let out = h.ptrack(&["run", "-q", "-l", "quiet one", "-s", "--", &script]);
+    assert!(out.status.success(), "{out:?}");
+    let job = h.json(&["status", "last", "--json"]);
+    let id = job["id"].as_str().unwrap();
+    assert_eq!(job["last_line"], "(no output)");
+    let log = log_of(&h, id);
+    let lines: Vec<&str> = log.lines().collect();
+    assert_eq!(lines[0], format!("# ptrack {id} quiet one"));
+    assert_eq!(lines[1], format!("# cmd: {script}"));
+    assert!(log.contains("\n# shell: yes\n# cwd: "), "{log}");
+    assert!(log.contains("\n# pid: "), "{log}");
+    assert!(log.contains("\n# started: "), "{log}");
+    let last = lines.last().unwrap();
+    assert!(last.starts_with("# ended: "), "{log}");
+    assert!(
+        last.contains("  exit=0  duration=00:0") && last.ends_with("  output=none  state=passed"),
+        "{last}"
+    );
+    let list = String::from_utf8_lossy(&h.ptrack(&["list"]).stdout).to_string();
+    assert!(list.contains("(no output)"), "{list}");
+
+    // Real output: counted in the footer, and only it can be the last line.
+    let out = h.ptrack(&["run", "-q", "-s", "--", "echo one&& echo two&& exit 4"]);
+    assert_eq!(out.status.code(), Some(4));
+    let job = h.json(&["status", "last", "--json"]);
+    assert_eq!(job["last_line"], "two");
+    let log = log_of(&h, job["id"].as_str().unwrap());
+    assert!(
+        log.contains("  exit=4  duration=00:0")
+            && log.trim_end().ends_with("  output=2 lines  state=failed"),
+        "{log}"
+    );
+    // The lines shown after a failure are the command's, not ptrack's.
+    let shown = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        shown.contains("  one") && shown.contains("  two"),
+        "{shown}"
+    );
+    assert!(
+        !shown.contains("# cmd:") && !shown.contains("# ended:"),
+        "{shown}"
+    );
+    let waited = String::from_utf8_lossy(&h.ptrack(&["wait", "last"]).stdout).to_string();
+    assert!(!waited.contains("# "), "{waited}");
+}
+
 #[test]
 fn project_and_tag_are_recorded_listed_and_filtered() {
     let h = Home::new("project");
@@ -355,6 +412,18 @@ fn missing_program_fails_cleanly() {
     let out = h.ptrack(&["run", "-q", "--", "definitely-not-a-real-program-xyz"]);
     assert_eq!(out.status.code(), Some(127));
     assert_eq!(h.state("last"), "failed");
+    // Even a command that never started leaves a log that says why.
+    let id = h.json(&["status", "last", "--json"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let log = log_of(&h, &id);
+    assert!(log.starts_with(&format!("# ptrack {id}\n")), "{log}");
+    assert!(log.contains("\n# [ptrack] could not start "), "{log}");
+    assert!(
+        log.trim_end().ends_with("output=none  state=failed"),
+        "{log}"
+    );
 }
 
 #[test]
@@ -617,6 +686,8 @@ fn dashboard_requires_token_and_local_host() {
     // The job has finished, so adding lines to its log here is safe.
     let id = data["jobs"][0]["id"].as_str().unwrap().to_string();
     let log_path = h.0.join("logs").join(format!("{id}.log"));
+    // The job's own lines: its output plus ptrack's header and footer.
+    let own_lines = std::fs::read_to_string(&log_path).unwrap().lines().count();
     let mut log = std::fs::OpenOptions::new()
         .append(true)
         .open(&log_path)
@@ -639,7 +710,7 @@ fn dashboard_requires_token_and_local_host() {
     assert_eq!(lines_of("99999"), 5000);
     assert_eq!(
         lines_of("all"),
-        6001,
+        6000 + own_lines,
         "the 6000 new lines plus the job's own"
     );
     let (_, whole) = http("GET", &format!("/api/jobs/{id}/log?lines=all"), &host, "");

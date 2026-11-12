@@ -1,6 +1,6 @@
 # Work plans
 
-There is no active plan right now. When the owner adds one, it goes in this folder.
+Active plan: [v0.7: no job is ever blind](v0.7/README.md).
 
 Finished plans, kept for reference:
 

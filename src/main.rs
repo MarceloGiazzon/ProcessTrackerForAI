@@ -8,6 +8,7 @@ mod hook;
 mod job;
 mod mcp;
 mod notify;
+mod output;
 mod platform;
 mod supervise;
 mod util;
@@ -59,6 +60,9 @@ RUN OPTIONS
       --session ID    agent session (default: detected from CLAUDE_CODE_SESSION_ID)
 
 ID can be a unique prefix of a job id, or 'last'.
+Every log starts with '# ptrack' lines (command, folder, pid) and ends with a '# ended:' line
+(exit code, duration, how many lines the command printed). A job that printed nothing shows
+'(no output)' as its last line.
 Data folder: set PTRACK_HOME to override the default per-user location.
 ";
 

@@ -291,7 +291,7 @@ pub fn wait(id: Option<&str>, timeout_s: Option<u64>, lines: Option<usize>) -> C
     let state = done.effective_state();
     println!("{}", summary(&done));
     let n = lines.unwrap_or(if state == State::Passed { 0 } else { 20 });
-    if let Ok(ls) = last_lines(Path::new(&done.log_path), n) {
+    if let Ok(ls) = crate::output::last_output_lines(Path::new(&done.log_path), n) {
         for l in ls {
             println!("  {l}");
         }

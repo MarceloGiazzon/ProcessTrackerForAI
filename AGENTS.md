@@ -18,6 +18,7 @@ Key idea: **one JSON file per job** (`<home>/jobs/<id>.json`) plus one log file
 |---|---|
 | `src/main.rs` | Argument parsing (hand-written `Parser`), `HELP` text, dispatch to commands |
 | `src/supervise.rs` | `ptrack run`: starts the command, pumps output to log/terminal, heartbeat, stop handling, final state. `detach()` starts a background copy of itself |
+| `src/output.rs` | The job's log file: child output plus ptrack's own `# ` lines (header, heartbeats, footer), output line count, `last_output_lines` |
 | `src/job.rs` | The `Job` record, its file paths, atomic save/load, `effective_state()` (running/paused/lost logic), `resolve()` (id prefix lookup) |
 | `src/commands.rs` | `list`, `status`, `tail`, `wait`, `stop`, `pause`, `resume`, `prune`, plus shared helpers `to_json`, `visible_jobs`, `stop_job`, `pause_job`, `resume_job` |
 | `src/platform/windows.rs` | Job Objects, Ctrl+Break, suspend/resume, detached spawn, PATHEXT lookup |

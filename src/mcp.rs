@@ -218,7 +218,8 @@ fn call_tool(name: &str, args: &Value, allow_control: bool) -> Result<String, St
                 if !state.is_active() {
                     let mut text = summary(&j);
                     if state != State::Passed {
-                        let lines = last_lines(Path::new(&j.log_path), 20).unwrap_or_default();
+                        let lines = crate::output::last_output_lines(Path::new(&j.log_path), 20)
+                            .unwrap_or_default();
                         text.push('\n');
                         text.push_str(&lines.join("\n"));
                     }
