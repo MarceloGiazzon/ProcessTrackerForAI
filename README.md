@@ -18,7 +18,7 @@ tokens) and the agent can make one short call instead of reading a log.
 
 - **A live dashboard in your browser** (`ptrack ui`) and an **MCP server** for agents (`ptrack mcp`).
 
-Status: v0.6, early. Feedback welcome.
+Status: v0.7, early. Feedback welcome.
 
 A step-by-step manual for non-specialists, in Portuguese, is in [docs/manual.html](docs/manual.html)
 (download it and open it in your browser).
@@ -446,6 +446,9 @@ writes a job file.
 - ✅ v0.5: setup recipes for Codex, Cursor, Antigravity CLI / Gemini CLI and Aider.
 - ✅ v0.6: dashboard: several logs open at once, tick jobs to copy or download them (Text, Markdown,
   JSON; full log), pause / stop / rerun many at once, search.
+- ✅ v0.7: no job is ever blind: log header and footer, heartbeat lines while a job is silent,
+  CPU time of the whole process tree, `quiet` / `stalled?` for silent jobs, lost jobs recorded
+  as lost.
 - v1.0: stable record format, signed binaries, winget / Scoop / Homebrew packages.
 
 ## Development

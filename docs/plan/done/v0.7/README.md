@@ -1,4 +1,4 @@
-# Plan: v0.7, no job is ever blind
+# Plan: v0.7, no job is ever blind (done: released as v0.7.0 on 2026-11-12)
 
 Asked for by the NPDev repository on 2026-11-12 (against ptrack 0.6.0). Goal: for any job,
 `ptrack tail -f` and the LAST LINE column of `ptrack list` answer within 5 seconds: is it alive?
@@ -8,7 +8,7 @@ Evidence: 96 of 771 job logs on the owner's machine were 0 bytes. Causes: output
 command (`> x.log`), filters that printed nothing, commands that are silent by nature (`cp`). Only
 ptrack sees every job, so only ptrack can fix the last three.
 
-Read [`AGENTS.md`](../../../AGENTS.md) first. One commit per phase, after `verify` passes, pushed,
+Read [`AGENTS.md`](../../../../AGENTS.md) first. One commit per phase, after `verify` passes, pushed,
 and CI green.
 
 | Phase | Request | What changes | Commit message |
