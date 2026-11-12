@@ -419,9 +419,12 @@ fn missing_program_fails_cleanly() {
         .to_string();
     let log = log_of(&h, &id);
     assert!(log.starts_with(&format!("# ptrack {id}\n")), "{log}");
-    assert!(log.contains("\n# [ptrack] could not start "), "{log}");
+    // On Windows the supervisor writes this line itself (`# [ptrack] ...`);
+    // on Unix the guard process prints it as the command's output.
+    assert!(log.contains("[ptrack] could not start "), "{log}");
+    let footer = log.lines().last().unwrap_or_default();
     assert!(
-        log.trim_end().ends_with("output=none  state=failed"),
+        footer.starts_with("# ended: ") && footer.ends_with("  state=failed"),
         "{log}"
     );
 }
