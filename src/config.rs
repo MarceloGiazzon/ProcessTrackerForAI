@@ -24,12 +24,19 @@ pub struct ActivityConfig {
     /// `# [ptrack] ...` line into the log, and again every so many seconds
     /// while the silence lasts. 0 turns these lines off.
     pub heartbeat_seconds: u64,
+    /// A running job that printed nothing for this long is `quiet` (still
+    /// using CPU) or, later, `stalled?`.
+    pub quiet_after: u64,
+    /// No output and no CPU for this long: `stalled?`. Advice only.
+    pub stalled_after: u64,
 }
 
 impl Default for ActivityConfig {
     fn default() -> Self {
         ActivityConfig {
             heartbeat_seconds: 30,
+            quiet_after: 60,
+            stalled_after: 300,
         }
     }
 }
@@ -43,7 +50,8 @@ pub fn heartbeat_seconds(cfg: &Config) -> u64 {
         .unwrap_or(cfg.activity.heartbeat_seconds)
 }
 
-const USAGE: &str = "usage: ptrack config [heartbeat-seconds N]";
+const USAGE: &str =
+    "usage: ptrack config [heartbeat-seconds N | quiet-after SECS | stalled-after SECS]";
 
 /// `ptrack config`: shows the activity settings, or changes one.
 pub fn command(args: &[String]) -> Result<i32, String> {
@@ -60,6 +68,17 @@ pub fn command(args: &[String]) -> Result<i32, String> {
         }
         ["heartbeat-seconds", n] => {
             cfg.activity.heartbeat_seconds = number("heartbeat-seconds", n)?
+        }
+        [name @ ("quiet-after" | "stalled-after"), n] => {
+            let secs = number(name, n)?;
+            if secs == 0 {
+                return Err(format!("{name} must be at least 1 second"));
+            }
+            if *name == "quiet-after" {
+                cfg.activity.quiet_after = secs;
+            } else {
+                cfg.activity.stalled_after = secs;
+            }
         }
         _ => return Err(USAGE.into()),
     }
@@ -78,6 +97,14 @@ fn show(cfg: &Config) {
     if let Ok(v) = std::env::var("PTRACK_HEARTBEAT_SECONDS") {
         println!("  PTRACK_HEARTBEAT_SECONDS={v} is set and wins over this setting");
     }
+    println!(
+        "quiet-after: {} (a running job silent this long is 'quiet' while it still uses CPU)",
+        a.quiet_after
+    );
+    println!(
+        "stalled-after: {} (no output and no CPU this long: 'stalled?', probably hung)",
+        a.stalled_after
+    );
     println!("settings file: {}", path().display());
 }
 

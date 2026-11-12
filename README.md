@@ -86,6 +86,18 @@ x9ewes  passed         41s    12m ago NPDev                -            claude-c
 cexj44  failed          2s     1h ago website              -            -            ./deploy.sh                    error: missing API_URL
 ```
 
+A running job that has printed nothing for a while shows how it is doing instead of `running`:
+
+| STATE | Meaning |
+|---|---|
+| `running` | It printed something in the last 60 seconds. |
+| `quiet` | No output for 60 s or more, but its processes still use CPU (at least 1% of one core). Slow, not dead. |
+| `stalled?` | No output **and** no CPU for 5 minutes. Probably hung. This is advice only: ptrack never stops a job because of it. The `?` is there because work done outside the job's process tree (for example by a Gradle daemon an earlier build started) is invisible to ptrack. |
+
+`ptrack status` says the same in words. In `--json`, `state` stays `"running"` and a separate
+`activity` field holds `running`, `quiet` or `stalled?`. Change the limits with
+`ptrack config quiet-after SECS` and `ptrack config stalled-after SECS`.
+
 Run commands from inside your project's folder: `npm test` needs the folder with
 `package.json`, and `gradle build` needs Gradle installed. ptrack runs the command exactly as you
 would, so it fails the same way when it would fail without ptrack.
@@ -105,14 +117,15 @@ output somewhere else (`cmd > build.log`). ptrack adds a few lines of its own, a
 # started: 2026-11-12T16:08:47Z
 ...whatever the command prints...
 # [ptrack] 00:01:30 running, no output for 30s, tree cpu=41s
-# [ptrack] 00:02:00 running, no output for 1m00s, tree cpu=1m12s
+# [ptrack] 00:02:00 quiet, no output for 1m00s, tree cpu=1m12s
 ...
 # ended: 2026-11-12T16:12:51Z  exit=0  duration=04:04  output=none  state=passed
 ```
 
 - `# shell: yes` appears only for `-s` jobs.
 - **Heartbeat lines** (`# [ptrack] <elapsed> ...`) appear only while the command prints nothing: after
-  30 seconds of silence, then every 30 seconds until it prints again. *tree cpu* is the CPU time
+  30 seconds of silence, then every 30 seconds until it prints again. Each one says whether the job
+  is `running`, `quiet`, `stalled?` (see the table above) or `paused`. *tree cpu* is the CPU time
   used so far by the command and everything it started, so a silent but busy job can be told
   apart from one that is just waiting. Change the interval with `ptrack config heartbeat-seconds N`
   (0 turns these lines off) or the `PTRACK_HEARTBEAT_SECONDS` environment variable, which wins.
@@ -355,6 +368,7 @@ agent (Aider, for example), use `--agent` / `--session`, or set the `PTRACK_AGEN
 | `ptrack notify [on\|off\|min-seconds N\|test]` | Desktop notification when a job ends. |
 | `ptrack notify webhook URL\|off`, `ptrack notify webhook-format json\|text` | Also POST each finished job to a web address. |
 | `ptrack config [heartbeat-seconds N]` | Shows or changes settings: how often heartbeat lines go into the log of a silent job (default 30 s, 0 = off). |
+| `ptrack config quiet-after SECS`, `ptrack config stalled-after SECS` | When a silent running job counts as `quiet` (default 60 s) or `stalled?` (no CPU either, default 300 s). |
 | `ptrack instructions` | Prints the text that tells an AI agent to use ptrack, for its instructions file. |
 
 Options for `run`: `-l/--label TEXT`, `-d/--detach` (background), `-q/--quiet` (summary only),

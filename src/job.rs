@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::ActivityConfig;
 use crate::platform;
 use crate::util::{iso_utc, now_ms};
 
@@ -95,6 +96,54 @@ pub struct Job {
     /// when the system could not tell, and in job files from before v0.7.
     #[serde(default)]
     pub cpu_ms: Option<u64>,
+    /// Last time the tree used at least 1% of one core (epoch ms); absent
+    /// if it has not yet. Tells `quiet` (slow) from `stalled?` (stuck).
+    #[serde(default)]
+    pub cpu_active_ms: Option<u64>,
+}
+
+/// What a running job is doing, judged from its output and its CPU use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activity {
+    /// Printed something recently.
+    Running,
+    /// Silent for a while, but still using CPU: slow, not dead.
+    Quiet,
+    /// Silent and idle for long: probably hung. Advice only; the `?` is
+    /// because work done outside the tree (e.g. a build daemon) is not seen.
+    Stalled,
+}
+
+impl Activity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Activity::Running => "running",
+            Activity::Quiet => "quiet",
+            Activity::Stalled => "stalled?",
+        }
+    }
+}
+
+/// Classifies a running job. Times are epoch ms; `cpu_known` is false when
+/// the system could not measure CPU, and then a job is never called stalled.
+pub fn classify(
+    now: u64,
+    started_ms: u64,
+    last_output_ms: Option<u64>,
+    cpu_active_ms: Option<u64>,
+    cpu_known: bool,
+    cfg: &ActivityConfig,
+) -> Activity {
+    let silent = now.saturating_sub(last_output_ms.unwrap_or(started_ms));
+    if silent < cfg.quiet_after.saturating_mul(1000) {
+        return Activity::Running;
+    }
+    let idle = now.saturating_sub(cpu_active_ms.unwrap_or(started_ms));
+    if cpu_known && silent.min(idle) >= cfg.stalled_after.saturating_mul(1000) {
+        Activity::Stalled
+    } else {
+        Activity::Quiet
+    }
 }
 
 pub fn home() -> PathBuf {
@@ -220,6 +269,7 @@ impl Job {
             error: None,
             last_output_ms: None,
             cpu_ms: None,
+            cpu_active_ms: None,
         }
     }
 
@@ -270,6 +320,25 @@ impl Job {
         } else {
             State::Running
         }
+    }
+
+    /// Running, quiet or stalled? for a job that is running right now;
+    /// `None` for any other state, or when its supervisor (older than v0.7)
+    /// records neither output times nor CPU.
+    pub fn activity(&self, cfg: &ActivityConfig) -> Option<Activity> {
+        if self.effective_state() != State::Running
+            || (self.cpu_ms.is_none() && self.last_output_ms.is_none())
+        {
+            return None;
+        }
+        Some(classify(
+            now_ms(),
+            self.started_ms,
+            self.last_output_ms,
+            self.cpu_active_ms,
+            self.cpu_ms.is_some(),
+            cfg,
+        ))
     }
 
     pub fn duration_ms(&self) -> u64 {
@@ -376,4 +445,45 @@ pub fn remove(job: &Job) -> io::Result<()> {
     let _ = fs::remove_file(stop_marker(&job.id));
     let _ = fs::remove_file(paused_marker(&job.id));
     fs::remove_file(job_path(&job.id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MIN: u64 = 60_000;
+
+    fn at(now: u64, output: Option<u64>, cpu: Option<u64>, known: bool) -> Activity {
+        classify(now, 0, output, cpu, known, &ActivityConfig::default())
+    }
+
+    #[test]
+    fn output_in_the_last_minute_means_running() {
+        assert_eq!(
+            at(10 * MIN, Some(10 * MIN - 59_000), None, true),
+            Activity::Running
+        );
+        assert_eq!(at(30_000, None, None, true), Activity::Running);
+    }
+
+    #[test]
+    fn silent_but_busy_is_quiet_never_stalled() {
+        assert_eq!(at(2 * MIN, Some(0), Some(2 * MIN), true), Activity::Quiet);
+        assert_eq!(
+            at(60 * MIN, None, Some(60 * MIN - 1_000), true),
+            Activity::Quiet
+        );
+    }
+
+    #[test]
+    fn silent_and_idle_for_five_minutes_is_stalled() {
+        assert_eq!(at(4 * MIN, Some(0), None, true), Activity::Quiet);
+        assert_eq!(at(5 * MIN, Some(0), None, true), Activity::Stalled);
+        assert_eq!(
+            at(9 * MIN, Some(MIN), Some(3 * MIN), true),
+            Activity::Stalled
+        );
+        // Without a CPU measurement, a job is never called stuck.
+        assert_eq!(at(60 * MIN, None, None, false), Activity::Quiet);
+    }
 }

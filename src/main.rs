@@ -47,6 +47,10 @@ USAGE
   ptrack config [heartbeat-seconds N]           show or change settings: while a job prints nothing,
                                                 add a '# [ptrack]' line to its log every N s
                                                 (default 30; 0 = off; or PTRACK_HEARTBEAT_SECONDS)
+  ptrack config quiet-after SECS                a running job silent this long shows as 'quiet'
+                                                while it still uses CPU (default 60)
+  ptrack config stalled-after SECS              no output and no CPU this long: 'stalled?', probably
+                                                hung; advice only, never acted on (default 300)
   ptrack instructions                           print the text that tells an AI agent to use ptrack
                                                 (append it to AGENTS.md, CLAUDE.md, GEMINI.md, ...)
   ptrack notify webhook URL|off                 also POST each finished job to URL

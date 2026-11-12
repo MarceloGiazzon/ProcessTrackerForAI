@@ -1090,7 +1090,6 @@ fn pid_alive(pid: i64) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
-#[cfg(unix)]
 fn eventually(mut condition: impl FnMut() -> bool, secs: u64) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_secs(secs);
     while std::time::Instant::now() < deadline {
@@ -1279,4 +1278,74 @@ fn cpu_time_of_the_whole_tree_is_recorded() {
     assert!(cpu >= 300, "cpu_ms = {cpu}: {job}");
     let status = String::from_utf8_lossy(&h.ptrack(&["status"]).stdout).to_string();
     assert!(status.contains("(whole process tree)"), "{status}");
+}
+
+#[test]
+fn silent_jobs_are_told_apart_as_quiet_or_stalled() {
+    let h = Home::new("activity");
+    assert!(h.ptrack(&["config", "quiet-after", "1"]).status.success());
+    assert!(h.ptrack(&["config", "stalled-after", "2"]).status.success());
+    assert_eq!(
+        h.ptrack(&["config", "stalled-after", "0"]).status.code(),
+        Some(2)
+    );
+    let detach = |script: &str| -> String {
+        let out = h.ptrack_env(
+            &["run", "-d", "-s", "--", script],
+            &[("PTRACK_HEARTBEAT_SECONDS", "1")],
+        );
+        assert!(out.status.success(), "{out:?}");
+        h.json(&["status", "last", "--json"])["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let activity = |id: &str| -> String {
+        h.json(&["status", id, "--json"])["activity"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+
+    // Waiting and silent: stalled?, in status, list and the log.
+    let idle = detach(LONG);
+    assert!(
+        eventually(|| activity(&idle) == "stalled?", 15),
+        "never stalled: {}",
+        h.json(&["status", &idle, "--json"])
+    );
+    assert_eq!(h.state(&idle), "running", "the state itself stays running");
+    let status = String::from_utf8_lossy(&h.ptrack(&["status", &idle]).stdout).to_string();
+    assert!(status.contains("stalled? (pid "), "{status}");
+    assert!(status.contains("it may be hung"), "{status}");
+    let list = String::from_utf8_lossy(&h.ptrack(&["list"]).stdout).to_string();
+    assert!(list.contains(&format!("{idle}  stalled?")), "{list}");
+    assert!(
+        eventually(
+            || log_of(&h, &idle).contains(" stalled?, no output for "),
+            10
+        ),
+        "{}",
+        log_of(&h, &idle)
+    );
+    assert!(h.ptrack(&["stop", &idle, "--force"]).status.success());
+
+    // Busy and silent: quiet, and never stalled.
+    #[cfg(windows)]
+    let spin = "powershell -NoProfile -Command \"while($true){}\"";
+    #[cfg(unix)]
+    let spin = "while :; do :; done";
+    let busy = detach(spin);
+    assert!(
+        eventually(|| activity(&busy) == "quiet", 15),
+        "{}",
+        h.json(&["status", &busy, "--json"])
+    );
+    for _ in 0..8 {
+        assert_eq!(activity(&busy), "quiet");
+        sleep(Duration::from_millis(500));
+    }
+    assert!(h.ptrack(&["stop", &busy, "--force"]).status.success());
+    // Finished jobs have no activity.
+    assert!(h.json(&["status", &busy, "--json"])["activity"].is_null());
 }

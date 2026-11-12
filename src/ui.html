@@ -285,7 +285,7 @@ function renderJob(j) {
   check.checked = selected.has(j.id);
   const row = el("div", { class: "row", onclick: toggle },
     check,
-    el("span", { class: "badge", style: "--state: var(--" + j.state + ")" }, j.state),
+    badge(j),
     el("div", { class: "info" }, el("div", { class: "title", title: title(j) }, j.tag ? el("span", { class: "tag" }, j.tag) : null, title(j)), meta),
     actions,
     j.last_line ? el("div", { class: "last", title: j.last_line }, j.last_line) : null,
@@ -371,6 +371,16 @@ function updateBar() {
 // sends, so the single-writer rule is untouched. Jobs an action doesn't fit
 // (pausing a finished job) are skipped, not treated as errors.
 const isActive = (j) => j.state === "running" || j.state === "paused";
+// A running job that has been silent shows how it is doing: "quiet" (still
+// using CPU, so slow rather than dead) or "stalled?" (no output and no CPU).
+const ACTIVITY = {
+  "quiet": { color: "running", why: "No output for a while, but it is still using CPU: slow, not dead." },
+  "stalled?": { color: "paused", why: "No output and no CPU for a long time: it may be hung. ptrack will not stop it on its own." },
+};
+function badge(j) {
+  const a = ACTIVITY[j.activity];
+  return el("span", { class: "badge", style: "--state: var(--" + (a ? a.color : j.state) + ")", title: a ? a.why : null }, a ? j.activity : j.state);
+}
 const BATCH = {
   pause: { label: "Pause", done: "Paused", why: "not running", applies: (j) => j.state === "running" },
   resume: { label: "Resume", done: "Resumed", why: "not paused", applies: (j) => j.state === "paused" },
@@ -672,7 +682,7 @@ function searchTerms() {
 }
 
 function matches(j, terms) {
-  const hay = [j.id, title(j), j.project, j.tag, j.cwd, j.agent, j.state, j.last_line]
+  const hay = [j.id, title(j), j.project, j.tag, j.cwd, j.agent, j.state, j.activity, j.last_line]
     .filter(Boolean).join("\n").toLowerCase();
   return terms.every((t) => hay.includes(t));
 }

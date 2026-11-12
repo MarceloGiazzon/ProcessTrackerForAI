@@ -7,7 +7,8 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use crate::job::{self, Job, State};
+use crate::config::{self, ActivityConfig};
+use crate::job::{self, Activity, Job, State};
 use crate::platform;
 use crate::supervise::{self, RunOpts, summary};
 use crate::util::{fmt_cpu, fmt_duration, last_lines, now_ms, truncate};
@@ -38,13 +39,28 @@ migrations) through `ptrack`:
 ";
 
 /// A job as JSON, with the state as it is right now and its duration.
+/// For a running job, `activity` says how it is doing: `running`, `quiet`
+/// or `stalled?` (null for every other state).
 pub fn to_json(job: &Job) -> serde_json::Value {
     let mut shown = job.clone();
     shown.state = job.effective_state();
     shown.project = job.project_name();
     let mut v = serde_json::to_value(&shown).unwrap_or_default();
     v["duration_ms"] = job.duration_ms().into();
+    v["activity"] = job
+        .activity(&config::load().activity)
+        .map(Activity::as_str)
+        .into();
     v
+}
+
+/// The word for a job's state, with a running job's activity in place of
+/// `running` (`quiet`, `stalled?`).
+pub fn state_word(j: &Job, cfg: &ActivityConfig) -> &'static str {
+    match j.activity(cfg) {
+        Some(a) => a.as_str(),
+        None => j.effective_state().as_str(),
+    }
 }
 
 /// Which jobs to show. Project and tag match regardless of case.
@@ -124,6 +140,7 @@ pub fn list(
     }
 
     let now = now_ms();
+    let activity = config::load().activity;
     println!(
         "{:<7} {:<10} {:>7} {:>9}  {:<20} {:<12} {:<12} {:<30} LAST LINE",
         "ID", "STATE", "TIME", "STARTED", "PROJECT", "TAG", "AGENT", "WHAT"
@@ -137,7 +154,7 @@ pub fn list(
         println!(
             "{:<7} {:<10} {:>7} {:>9}  {:<20} {:<12} {:<12} {:<30} {}",
             j.id,
-            j.effective_state().as_str(),
+            state_word(j, &activity),
             fmt_duration(j.duration_ms()),
             format!("{} ago", fmt_duration(now.saturating_sub(j.started_ms))),
             truncate(j.project_name().as_deref().unwrap_or("-"), 20),
@@ -169,7 +186,16 @@ pub fn status(id: Option<&str>, json: bool) -> CmdResult {
     let now = now_ms();
     let row = |k: &str, v: &str| println!("{k:<9} {v}");
     row("job", &j.id);
+    let activity = j.activity(&config::load().activity);
+    let silent_for = fmt_duration(now.saturating_sub(j.last_output_ms.unwrap_or(j.started_ms)));
     let state_text = match (state, j.pid) {
+        (_, Some(pid)) if activity == Some(Activity::Quiet) => format!(
+            "quiet (pid {pid}): no output for {silent_for}, but still using CPU, so slow rather than stuck"
+        ),
+        (_, Some(pid)) if activity == Some(Activity::Stalled) => format!(
+            "stalled? (pid {pid}): no output for {silent_for} and no CPU for {}; it may be hung (ptrack will not stop it on its own)",
+            fmt_duration(now.saturating_sub(j.cpu_active_ms.unwrap_or(j.started_ms)))
+        ),
         (s, Some(pid)) if s.is_active() => format!("{} (pid {pid})", s.as_str()),
         (State::Lost, _) => format!(
             "lost (no heartbeat for {}; its supervisor is gone)",
@@ -215,6 +241,13 @@ pub fn status(id: Option<&str>, json: bool) -> CmdResult {
     row("duration", &fmt_duration(j.duration_ms()));
     if let Some(ms) = j.cpu_ms {
         row("cpu", &format!("{} (whole process tree)", fmt_cpu(ms)));
+    }
+    if state.is_active() && (j.cpu_ms.is_some() || j.last_output_ms.is_some()) {
+        let output = match j.last_output_ms {
+            Some(t) => format!("last {} ago", fmt_duration(now.saturating_sub(t))),
+            None => "none yet".into(),
+        };
+        row("output", &output);
     }
     if let Some(c) = j.exit_code {
         row("exit", &c.to_string());

@@ -12,12 +12,15 @@
 //!
 //! Windows does not need this: its Job Object keeps a running total itself.
 //! The arithmetic is plain Rust, so it is unit-tested on every system.
-#![cfg_attr(windows, allow(dead_code))]
+//!
+//! `CpuWatch` (every system) turns the total into "when did the tree last
+//! use CPU", which tells a slow job from a stuck one.
 
 use std::collections::HashMap;
 
 /// One process of the tree, as the system reports it right now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(windows, allow(dead_code))]
 pub struct ProcCpu {
     pub pid: u32,
     pub ppid: u32,
@@ -28,11 +31,13 @@ pub struct ProcCpu {
 }
 
 #[derive(Default)]
+#[cfg_attr(windows, allow(dead_code))]
 pub struct TreeCpu {
     seen: HashMap<u32, ProcCpu>,
     total_ms: u64,
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 impl TreeCpu {
     /// Takes the processes in the tree right now; returns the total CPU time
     /// of the tree so far, in ms.
@@ -58,6 +63,43 @@ impl TreeCpu {
         }
         self.seen = now;
         self.total_ms
+    }
+}
+
+/// Decides when the tree last *used* CPU: at least 1% of one core, averaged
+/// since the last time it did. Measuring against that last point (instead
+/// of the previous sample) means coarse system clocks still add up, and a
+/// single blip after a long idle stretch does not count.
+#[derive(Default)]
+pub struct CpuWatch {
+    since_ms: u64,
+    since_cpu_ms: u64,
+    /// Last time the tree counted as busy (epoch ms).
+    pub active_ms: Option<u64>,
+}
+
+impl CpuWatch {
+    pub fn new(start_ms: u64) -> CpuWatch {
+        CpuWatch {
+            since_ms: start_ms,
+            ..CpuWatch::default()
+        }
+    }
+
+    /// Takes the tree's total CPU time at `now`.
+    pub fn sample(&mut self, now: u64, cpu_ms: u64) {
+        let used = cpu_ms.saturating_sub(self.since_cpu_ms);
+        let elapsed = now.saturating_sub(self.since_ms);
+        if used > 0 && used * 100 >= elapsed {
+            self.mark(now, cpu_ms);
+        }
+    }
+
+    /// A paused job is not stuck: its idle time starts again when it resumes.
+    pub fn mark(&mut self, now: u64, cpu_ms: u64) {
+        self.active_ms = Some(now);
+        self.since_ms = now;
+        self.since_cpu_ms = self.since_cpu_ms.max(cpu_ms);
     }
 }
 
@@ -131,6 +173,23 @@ mod tests {
         // 11 left the group without being reaped by anyone we see.
         assert_eq!(t.update(vec![p(10, 1, 100, 0)]), 500);
         assert_eq!(t.update(vec![]), 500);
+    }
+
+    #[test]
+    fn cpu_counts_as_used_at_one_percent_of_a_core() {
+        let mut w = CpuWatch::new(0);
+        // 10 ms over 2 s is 0.5%: not yet.
+        w.sample(2_000, 10);
+        assert_eq!(w.active_ms, None);
+        // 40 ms over 4 s is 1%: busy, counted from here on.
+        w.sample(4_000, 40);
+        assert_eq!(w.active_ms, Some(4_000));
+        // A tiny blip after a long idle stretch is not "busy".
+        w.sample(304_000, 50);
+        assert_eq!(w.active_ms, Some(4_000));
+        // A paused job starts its idle time again.
+        w.mark(310_000, 50);
+        assert_eq!(w.active_ms, Some(310_000));
     }
 
     #[test]

@@ -275,7 +275,7 @@ fn one_line(j: &Job) -> String {
     let mut s = format!(
         "{} {} {} \"{}\"",
         j.id,
-        j.effective_state().as_str(),
+        commands::state_word(j, &crate::config::load().activity),
         fmt_duration(j.duration_ms()),
         j.title()
     );
